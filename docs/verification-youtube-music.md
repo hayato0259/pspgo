@@ -5,7 +5,11 @@
 ## 結論
 
 - **技術的には再生できる。** ただし PSP 単体では不可能で、**自宅サーバー経由の2段構成が必須**
-  - PSP は現代の TLS を扱えず、Opus もデコードできないため、YouTube に直接つなぐ選択肢は最初から存在しない
+  - PSP から YouTube へ直接つなぐ選択肢は実質存在しない。TLS 1.2 自体は mbedTLS の静的リンクで
+    実機動作の前例があるが（Moonlight PSP・tls4psp）、YouTube 側の PO Token / SABR 強制は
+    ブラウザ相当の JS 実行環境を要求するため、PSP 上では解決不能
+  - Opus（YouTube の主流音声）は PSP でハードウェアデコードできず、ソフトデコードは
+    fixed-point 再ビルドが必要で CPU の 20-35% を食う（推定）。サーバー側変換が合理的
   - サーバーが「取得 + MP3 CBR 128kbps 変換 + 平文HTTP配信」をすべて担い、PSP は「HTTP GET して MP3 をハードウェアデコードする」だけに徹する
 - **本検証で全経路の疎通をエミュレータ上で確認済み**
   - YouTube → yt-dlp → ffmpeg → HTTP → PSPクライアント(自作) → sceMp3 → sceAudio が実時間で動いた
@@ -78,15 +82,31 @@
   - Opus は PSP でデコード不可能なので必ずサーバー側で変換する
 - **LAN 内限定運用**（平文 HTTP のため外部公開しない）
 
+## 実機ハードウェアの制約（Webリサーチによる裏付け）
+
+- **CPU コスト実測（LightMP3 の実績値）**: Media Engine での MP3 デコードは CPU 20MHz 相当で足りる
+  （333MHz の約6%）。MP3 CBR 配信という設計は実機でも最も軽い経路
+- **AAC もハードウェアデコード可能**: `sceAudiocodec` (PSP_CODEC_AAC=0x1003) / `sceAac`
+  （FW 3.95以降、6.61 にあり）。前例は OpenTube（YouTube クライアント、ソース公開）。
+  MP3 で問題が出た場合の代替経路として確保
+- **Wi-Fi**: PSP Go は 802.11b のみ（2.4GHz 専用）。実効スループットの公開実測は
+  100〜500KB/s と情報が食い違っており実機計測が必要。ただし音声 16KB/s には余裕
+- **WPA2**: 純正は WEP / WPA-PSK まで（WPA2 非対応）だが、**ARK-4 r160 以降は
+  WPA2-PSK(AES/CCMP) パッチを内蔵**。CCMP のみ・有効化中は WEP/WPA 不可という制約あり
+- **メモリ**: ユーザー空間は既定 24MB。ARK-4 では EBOOT の PARAM.SFO に `MEMSIZE=1` を
+  書けば最大 55MB に拡張可（ただし PSP Go のポーズ機能が無効になる）。
+  大きめのジッタバッファを取りたくなったら使う
+- **Media Engine は排他リソース**: ME を使う他プラグイン（Music.prx 等）と共存不可
+- **Subsonic / Navidrome クライアントの PSP homebrew は存在しない** — 作れば初の事例
+
 ## 実機（PSP Go, 6.61 + CFW）で残る確認事項
 
 エミュレータで検証できていない、実機でのみ確認できる項目:
 
-1. 実機 Wi-Fi (802.11b, 最大実効 ~500KB/s 程度) での安定スループット
+1. 実機 Wi-Fi での安定スループットとパケットロス（ジッタバッファ設計の根拠になる）
 2. sceMp3 の実機挙動（PPSSPP は ffmpeg による近似実装）
 3. PSP Go 固有: 内蔵ストレージへの EBOOT 配置 (`ms0:/PSP/GAME/`)、スリープ復帰時の Wi-Fi 再接続
-4. WPA2 対応状況（PSP は WPA2-AES に公式対応していない世代。ルーター側で
-   WPA/TKIP を許可する SSID を用意する必要がある可能性が高い）
+4. ARK-4 の WPA2 パッチが PSP Go (09g) で動くか（機種分岐はないので動く見込み）
 
 ## 次の一手
 
