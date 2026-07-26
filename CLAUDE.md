@@ -1,18 +1,18 @@
-# pspgo — PSP Go 向け音楽ストリーミングアプリ
+# pspgo — PSP Go (CFW) 向けアプリのモノレポ
 
-PSP Go (6.61 CFW) で動く自作音楽プレイヤーと、その配信サーバーを作るプロジェクト。
-実現可否の検証結果と設計判断は [docs/verification-youtube-music.md](docs/verification-youtube-music.md) を必ず読むこと。
+PSP Go (6.61 + Ark-4) で動く自作アプリ群。将来 GitHub で公開予定。
+アプリは `apps/<名前>/` 配下で管理する。
 
-## 構成
+## アプリ一覧
 
-| ディレクトリ | 内容 |
+| パス | 内容 |
 |---|---|
-| `psp-client/poc1-audio/` | PoC1: sceAudio 音声出力の最小検証 |
-| `psp-client/poc2-stream/` | PoC2: HTTP → sceMp3 → sceAudio ストリーミング再生 |
-| `server/` | 配信プロキシ (Python, ffmpeg + yt-dlp) |
-| `docs/` | 検証レポート・設計ドキュメント |
+| `apps/youtube-music/` | 音楽ストリーミングプレイヤー（PSPクライアント + 配信プロキシ） |
 
-## ビルド環境
+各アプリの詳細・設計判断はそのアプリの `docs/` を読むこと。
+youtube-music の実現可否検証は [apps/youtube-music/docs/verification-youtube-music.md](apps/youtube-music/docs/verification-youtube-music.md)。
+
+## ビルド環境（共通）
 
 - ツールチェーン: `~/pspdev-install/pspdev` (pspdev v20260701 プリビルト, macOS arm64)
 - ビルド前に必ず:
@@ -20,25 +20,33 @@ PSP Go (6.61 CFW) で動く自作音楽プレイヤーと、その配信サー�
   export PSPDEV="$HOME/pspdev-install/pspdev"
   export PATH="$PSPDEV/bin:$PATH"
   ```
-- 各 PoC ディレクトリで `make` → `EBOOT.PBP` が生成される
+- 各 PoC / アプリのディレクトリで `make` → `EBOOT.PBP` が生成される
 - エミュレータ: PPSSPP 1.20.4 (`/Applications/PPSSPPSDL.app`)。
   **EBOOT.PBP は絶対パスで渡す**（相対パスは umd0:/ 扱いで失敗する）
+- PPSSPP のネットワークは `~/.config/ppsspp/PSP/SYSTEM/ppsspp.ini` の
+  `[Network] EnableWLAN = True` が必要（設定済み）
 
 ## ポート割り当て
 
 | 用途 | ポート |
 |---|---|
-| 配信プロキシ (server/proxy.py) | 8080 |
+| youtube-music 配信プロキシ (apps/youtube-music/server/proxy.py) | 8080 |
 
 ## PSP 固有の地雷（検証で踏んだもの）
 
 - **BSD ソケット関数 (socket/connect/recv) を使わない** — 新 NID で PPSSPP 未実装。
   `sceNetInet*` を直接呼ぶ
-- **PPSSPP のソケットは EAGAIN を返す** — recv はリトライラッパー経由で呼ぶ (poc2 の recv_wait)
+- **PPSSPP のソケットは EAGAIN を返す** — recv はリトライラッパー経由で呼ぶ
+  (poc2-stream の recv_wait)
 - sceMp3 のバッファは 64byte アライン、終端不明ストリームは `mp3StreamEnd = 0x7FFFFFFF`
 - 配信フォーマットは MP3 CBR 128kbps / 44.1kHz / stereo に固定（Opus は PSP で不可）
-- PPSSPP のネットワークは `~/.config/ppsspp/PSP/SYSTEM/ppsspp.ini` の
-  `[Network] EnableWLAN = True` が必要（設定済み）
+- Media Engine は排他リソース。ME を使う他プラグインとは共存できない
+
+## 公開前のチェック（GitHub 公開予定のため）
+
+- 認証情報・LAN の IP アドレス・SSID をコードやドキュメントにハードコードしたまま
+  コミットしない（SERVER_HOST は make 引数で渡す設計を維持する）
+- YouTube 経路の規約リスクは README に明記する（検証レポート参照）
 
 ## 方針
 
