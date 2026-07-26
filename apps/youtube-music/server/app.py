@@ -9,6 +9,7 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
   GET /api/home              ホーム:    section\t<題> / playlist\t<id>\t<題>\t<副題> / video\t<id>\t<題>\t<アーティスト>
   GET /api/playlist?id=<id>  内容:      meta\t<題> / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
   GET /api/radio?yt=<videoId> ラジオ:   meta\tラジオ / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
+  GET /api/lyrics?yt=<videoId> 歌詞:    line\t<歌詞1行> / none\t1
   GET /api/login/start       ログイン開始: code\t<入力コード> / url\t<URL> / interval\t<秒>
   GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
   GET /api/logout            トークン破棄
@@ -418,6 +419,28 @@ def tsv_radio(video_id: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def tsv_lyrics(video_id: str) -> str:
+    watch, _ = with_fallback(
+        lambda yt: yt.get_watch_playlist(videoId=video_id, limit=1),
+        "歌詞情報取得",
+    )
+    browse_id = watch.get("lyrics")
+    if not browse_id:
+        return "none\t1\n"
+
+    result, _ = with_fallback(
+        lambda yt: yt.get_lyrics(browse_id),
+        "歌詞取得",
+    )
+    lyrics = result.get("lyrics") if result else None
+    if not lyrics:
+        return "none\t1\n"
+
+    lines = [f"line\t{clean(line, limit=120)}"
+             for line in lyrics.split("\n")[:200]]
+    return "\n".join(lines) + "\n"
+
+
 def tsv_status() -> str:
     name = "-"
     if is_authed():
@@ -479,6 +502,14 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query)
+
+        if url.path == "/api/lyrics" and "yt" in q:
+            try:
+                self._text(tsv_lyrics(q["yt"][0]))
+            except Exception as e:
+                self.log_message("lyrics error: %r", e)
+                self._text("none\t1\n")
+            return
 
         try:
             if url.path == "/api/status":

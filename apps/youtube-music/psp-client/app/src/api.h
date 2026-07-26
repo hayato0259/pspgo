@@ -37,6 +37,9 @@ int api_playlist(const char *id, char *title_out, int title_size,
 int api_radio(const char *video_id, char *title_out, int title_size,
               ApiTrack *tracks, int max);
 
+/* /api/lyrics?yt=。TSV を buf にそのまま格納。戻り値: バイト数 / <0 エラー */
+int api_lyrics(const char *video_id, char *buf, int bufsize);
+
 /* 直近の API 呼び出しがサーバーから返したエラー文。無ければ空文字列。
    サーバーが error 行を返した場合、上記の関数は負値を返す。 */
 const char *api_last_error(void);
