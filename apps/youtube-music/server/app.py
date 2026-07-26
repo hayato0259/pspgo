@@ -93,6 +93,36 @@ def get_yt() -> YTMusic:
         return _yt
 
 
+_yt_public = None
+
+
+def get_yt_public() -> YTMusic:
+    """未認証クライアント。認証済みクライアントが失敗したときの退避先。"""
+    global _yt_public
+    with _yt_lock:
+        if _yt_public is None:
+            _yt_public = YTMusic()
+        return _yt_public
+
+
+def with_fallback(fn, what: str):
+    """認証済みクライアントで試し、失敗したら未認証クライアントで再試行する。
+
+    2026-07 時点で、OAuth トークンは YouTube Music の内部 API から
+    全エンドポイント 400 で拒否される (ytmusicapi 側の既知の制約)。
+    ログインした結果アプリが使えなくなるのを避けるため、
+    ここで一般向けの内容に退避する。
+    戻り値: (結果, 退避したか)
+    """
+    if is_authed():
+        try:
+            return fn(get_yt()), False
+        except Exception as e:
+            print(f"[server] 認証クライアントで{what}に失敗 → 一般向けに退避: {e}",
+                  flush=True)
+    return fn(get_yt_public()), is_authed()
+
+
 def is_authed() -> bool:
     return (TOKEN_FILE.exists() and can_login()) or BROWSER_FILE.exists()
 
@@ -137,6 +167,10 @@ def login_start() -> str:
     # user_code を付けた URL にしておくと、QR から開いた時点でコードが入力済みになる
     verify_url = code["verification_url"]
     deep_url = f"{verify_url}?user_code={code['user_code']}"
+
+    # 画面が見えない環境 (ヘッドレス検証や実機デバッグ) でも承認できるよう記録する。
+    # user_code は本人に見せるための値で、秘密情報ではない。
+    print(f"[server] ログイン待ち: {deep_url}", flush=True)
 
     return (
         f"code\t{clean(code['user_code'])}\n"
@@ -230,8 +264,11 @@ def ffmpeg_cmd(src: str) -> list:
 
 
 def tsv_home() -> str:
+    sections, fellback = with_fallback(lambda yt: yt.get_home(limit=6), "ホーム取得")
     lines = []
-    for section in get_yt().get_home(limit=6):
+    if fellback:
+        lines.append("section\t※ ログイン中ですが一般向けの内容を表示しています")
+    for section in sections:
         lines.append(f"section\t{clean(section.get('title'))}")
         for item in section.get("contents", []):
             title = clean(item.get("title"))
@@ -244,17 +281,17 @@ def tsv_home() -> str:
 
 
 def tsv_playlist(pid: str) -> str:
-    yt = get_yt()
-    lines = []
-    try:
-        pl = yt.get_playlist(pid, limit=100)
-        lines.append(f"meta\t{clean(pl.get('title'))}")
-        tracks = pl.get("tracks", [])
-    except Exception:
-        # ラジオ/ミックス系プレイリストは get_watch_playlist で取れる
-        watch = yt.get_watch_playlist(playlistId=pid, limit=100)
-        lines.append(f"meta\t{clean(watch.get('title')) or 'Mix'}")
-        tracks = watch.get("tracks", [])
+    def fetch(yt):
+        try:
+            pl = yt.get_playlist(pid, limit=100)
+            return clean(pl.get("title")), pl.get("tracks", [])
+        except Exception:
+            # ラジオ/ミックス系プレイリストは get_watch_playlist で取れる
+            watch = yt.get_watch_playlist(playlistId=pid, limit=100)
+            return clean(watch.get("title")) or "Mix", watch.get("tracks", [])
+
+    (title, tracks), _ = with_fallback(fetch, "プレイリスト取得")
+    lines = [f"meta\t{title}"]
 
     for t in tracks:
         vid = t.get("videoId")

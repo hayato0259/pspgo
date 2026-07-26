@@ -52,6 +52,40 @@
 5. Homebrew tap `pspdev/pspdev` は存在しない。導入は GitHub Releases のプリビルト
    (`pspdev-macos-latest-arm64.tar.gz`) を展開する
 
+## ログイン（OAuth）の検証結果 — 2026-07-26
+
+実アカウントで検証した結果を記録する。**ログイン自体は成功するが、
+得られたトークンで YouTube Music のパーソナライズ情報は取得できない。**
+
+- **成功したこと**
+  - Google Cloud の「テレビと入力が制限されているデバイス」種別クライアントで
+    デバイスコードフローが動作（コード発行 → QR 表示 → 承認 → トークン保存）
+  - トークンは正しく保存され、`/api/status` が `auth 1` を返す
+- **失敗したこと: ytmusicapi + OAuth トークンで全エンドポイントが HTTP 400**
+  - `get_home` / `get_library_playlists` / `get_liked_songs` / `get_history` /
+    `get_account_info` / `search` すべてが
+    `400 Bad Request: Request contains an invalid argument`
+  - 未認証クライアントでは同じ操作が成功するため、実装側の不備ではなく
+    **YouTube Music 内部 API が OAuth（TV クライアント）トークンを受け付けない**
+    ことによるもの
+  - 対策として、認証クライアントが失敗したら未認証クライアントへ退避する実装を入れた
+    （ホーム画面の先頭に「一般向けの内容を表示しています」と明示する）。
+    ログインしたことでアプリが使えなくなる状態は避けられている
+- **未検証: 公式 YouTube Data API v3 経由のパーソナライズ**
+  - トークン自体は有効だが、プロジェクトで **YouTube Data API v3 が未有効化**
+    のため 403（`has not been used in project ... before or it is disabled`）
+  - 有効化すれば `playlists.list(mine=true)`（自分のプレイリスト）や
+    `playlistItems.list(playlistId=LL)`（高評価した動画）は取得できる見込み。
+    これは公式 API なので規約上もクリーン
+  - ただし「マイミックス」は YouTube Music が生成するもので Data API には無い。
+    公式 API で出せるのは自分のプレイリスト・高評価・登録チャンネルまで
+
+### 結論として取るべき方針
+
+パーソナライズを実現するなら **公式 Data API v3 で「自分のプレイリスト」を出す**のが
+現実的かつ規約上安全。ytmusicapi の OAuth 経路に期待するのは止める。
+`get_home` 相当の一般向けフィードは未認証クライアントで引き続き取得できる。
+
 ## YouTube Music を音源にすることの規約リスク（誠実な整理)
 
 - YouTube の音声ストリームを取得する**公認 API は存在しない**。Data API v3 はメタデータのみ
