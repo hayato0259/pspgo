@@ -38,11 +38,19 @@ void draw_hgrad(int x, int y, int w, int h, unsigned int left, unsigned int righ
 void gfx_blit_raw(const unsigned int *pixels, int texside,
                   int x, int y, int w, int h);
 
-/* --- 手続きテクスチャによる部品 --- */
+/*
+ * tint 付き・サブピクセル座標版。
+ * アニメーション (拡大など) は整数座標だと 1px 刻みでカクつくため、
+ * 動くものは必ずこちらで描く。tint 0xFFFFFFFF で原色。
+ */
+void gfx_blit_raw_ex(const unsigned int *pixels, int texside,
+                     float x, float y, float w, float h, unsigned int tint);
+
+/* --- 手続きテクスチャによる部品 (座標は float。動くものもそのまま渡せる) --- */
 void gfx_logo(int x, int y, int size);                    /* YT Music ロゴ */
-void gfx_glow(int x, int y, int w, int h, int alpha);     /* 白い光彩 (選択) */
-void gfx_shadow(int x, int y, int w, int h, int alpha);   /* 柔らかい落ち影 */
-void gfx_card_fill(int x, int y, int size, unsigned int color); /* 角丸ベタ塗り */
+void gfx_glow(float x, float y, float w, float h, int alpha);   /* 白い光彩 */
+void gfx_shadow(float x, float y, float w, float h, int alpha); /* 柔らかい落ち影 */
+void gfx_card_fill(float x, float y, float size, unsigned int color); /* 角丸ベタ塗り */
 
 /* --- テキスト --- */
 void text(float x, float y, unsigned int color, float size, const char *s);

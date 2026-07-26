@@ -15,6 +15,14 @@ void art_shutdown(void);
 void art_draw(const char *id, int x, int y, int size);
 
 /*
+ * サブピクセル座標 + 減光 (tint) 版。
+ * 拡大アニメーション中のカードや、非アクティブ段の減光表示に使う。
+ * tint は 0xFFFFFFFF で原色、0xFFB0B0B0 などで暗くなる。
+ */
+void art_draw_ex(const char *id, float x, float y, float size,
+                 unsigned int tint);
+
+/*
  * 読み込み済みアートワークの平均色 (ABGR)。背景の環境光に使う。
  * まだ読み込めていない場合は 0 を返す。
  */

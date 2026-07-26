@@ -169,7 +169,8 @@ void art_shutdown(void)
 
 /* --- 描画 --------------------------------------------------------------- */
 
-void art_draw(const char *id, int x, int y, int size)
+void art_draw_ex(const char *id, float x, float y, float size,
+                 unsigned int tint)
 {
     g_clock++;
 
@@ -194,10 +195,15 @@ void art_draw(const char *id, int x, int y, int size)
     unlock();
 
     if (state == SLOT_READY)
-        gfx_blit_raw(px, ART_SIDE, x, y, size, size);
+        gfx_blit_raw_ex(px, ART_SIDE, x, y, size, size, tint);
     else
         gfx_card_fill(x, y, size,
                       state == SLOT_MISSING ? C_CARD_MISS : C_CARD_LOAD);
+}
+
+void art_draw(const char *id, int x, int y, int size)
+{
+    art_draw_ex(id, (float)x, (float)y, (float)size, 0xFFFFFFFF);
 }
 
 unsigned int art_avg_color(const char *id)

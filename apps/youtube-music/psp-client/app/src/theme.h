@@ -23,8 +23,13 @@
 /* ホーム (カルーセル) */
 #define CARD_SIZE  62
 #define CARD_PITCH 74    /* カード + 12px の間隔 */
-#define ROW_TOP    44    /* 1 段目のセクション見出しのベースライン */
-#define ROW_PITCH  96    /* セクション 1 段の高さ (見出し+カード+キャプション) */
+#define ROW_TOP    42    /* 1 段目のセクション見出しのベースライン */
+#define ROW_PITCH  92    /* セクション 1 段の高さ */
+#define C_CARD_DIM 0xFFA8A8A8   /* 非アクティブ段のカードの減光 tint */
+
+/* 画面下の固定情報パネル (選択中カードの曲情報) */
+#define INFO_H       38  /* 再生バーが無いときの高さ (サムネイル付き) */
+#define INFO_H_SLIM  26  /* 再生バーと同時に出すときの高さ */
 
 /* リスト画面 */
 #define LIST_TOP  42

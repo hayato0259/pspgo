@@ -26,9 +26,9 @@ static unsigned int ambient_top_color(void)
     /* 目標色: 既定はニュートラルな暗青。指定があればその色を暗く落とした値 */
     float tr = 0x20, tg = 0x24, tb = 0x2A;
     if (g_amb_target) {
-        tr = 10.0f + (float)((g_amb_target)       & 0xFF) * 0.24f;
-        tg = 10.0f + (float)((g_amb_target >> 8)  & 0xFF) * 0.24f;
-        tb = 10.0f + (float)((g_amb_target >> 16) & 0xFF) * 0.24f;
+        tr = 10.0f + (float)((g_amb_target)       & 0xFF) * 0.34f;
+        tg = 10.0f + (float)((g_amb_target >> 8)  & 0xFF) * 0.34f;
+        tb = 10.0f + (float)((g_amb_target >> 16) & 0xFF) * 0.34f;
     }
     g_amb[0] += (tr - g_amb[0]) * 0.05f;
     g_amb[1] += (tg - g_amb[1]) * 0.05f;
@@ -41,7 +41,7 @@ static unsigned int ambient_top_color(void)
 void ui_frame_begin(void)
 {
     gfx_frame_begin();
-    draw_vgrad(0, 0, SCR_W, 110, ambient_top_color(), C_BG);
+    draw_vgrad(0, 0, SCR_W, 130, ambient_top_color(), C_BG);
     int t = (int)(gfx_frame / 2) % (SCR_W + 240);
     int x = t - 240;
     draw_hgrad(x, 0, 120, SCR_H, 0x00FFFFFF, 0x08FFFFFF);
@@ -73,6 +73,37 @@ void ui_chrome(const char *title, const char *hint,
     draw_rect(0, SCR_H - 18, SCR_W, 18, 0xFF0A0A0A);
     draw_rect(0, SCR_H - 18, SCR_W, 1, C_LINE);
     text(8, SCR_H - 5, C_DIM, 0.65f, hint);
+}
+
+/* --- 選択中カードの情報パネル -------------------------------------------- */
+
+void ui_selection_info(const char *art_id, const char *title,
+                       const char *subtitle, int bottom, int slim)
+{
+    int h = slim ? INFO_H_SLIM : INFO_H;
+    int top = bottom - h;
+
+    /* 上端をフェードさせたスクリム (帯のエッジを見せない) */
+    draw_vgrad(0, top - 10, SCR_W, 10, 0x00000000, 0xC0000000);
+    draw_vgrad(0, top, SCR_W, h, 0xC0000000, 0xF0000000);
+
+    float tx = MARGIN;
+    if (!slim) {
+        art_draw(art_id, MARGIN, top + (h - 28) / 2, 28);
+        tx = MARGIN + 28 + 10;
+    }
+
+    if (slim) {
+        /* 1 行: 題名 (白) のみ */
+        text_clipped(tx, top + h / 2 + 5, SCR_W - (int)tx - MARGIN,
+                     C_TEXT, 0.62f, title);
+    } else {
+        text_clipped(tx, top + 16, SCR_W - (int)tx - MARGIN,
+                     C_TEXT, 0.66f, title);
+        if (subtitle && subtitle[0])
+            text_clipped(tx, top + 30, SCR_W - (int)tx - MARGIN,
+                         C_DIM, 0.55f, subtitle);
+    }
 }
 
 /* --- 再生バー ------------------------------------------------------------ */

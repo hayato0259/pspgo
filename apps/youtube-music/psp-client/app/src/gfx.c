@@ -260,6 +260,7 @@ void gfx_frame_end(void)
 
 typedef struct { unsigned int color; short x, y, z; } RectVtx;
 typedef struct { short u, v; short x, y, z; } TexVtx;
+typedef struct { float u, v; float x, y, z; } TexVtxF;   /* サブピクセル用 */
 
 void draw_rect(int x, int y, int w, int h, unsigned int color)
 {
@@ -305,8 +306,13 @@ void draw_hgrad(int x, int y, int w, int h,
 
 /* --- テクスチャ描画 ------------------------------------------------------ */
 
+/*
+ * テクスチャ描画の共通実装。座標は float (サブピクセル)。
+ * 整数座標で拡大アニメーションを描くと 1px 刻みでカクつくため、
+ * すべての blit をこの float 版に統一する。
+ */
 static void blit_tex(const unsigned int *tex, int texside,
-                     int x, int y, int w, int h, unsigned int tint)
+                     float x, float y, float w, float h, unsigned int tint)
 {
     gu_state_2d();
     sceGuEnable(GU_TEXTURE_2D);
@@ -315,32 +321,32 @@ static void blit_tex(const unsigned int *tex, int texside,
     sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
     sceGuTexFilter(GU_LINEAR, GU_LINEAR);
     sceGuColor(tint);
-    TexVtx *v = sceGuGetMemory(2 * sizeof(TexVtx));
-    v[0].u = 0;       v[0].v = 0;       v[0].x = x;     v[0].y = y;     v[0].z = 0;
-    v[1].u = texside; v[1].v = texside; v[1].x = x + w; v[1].y = y + h; v[1].z = 0;
+    TexVtxF *v = sceGuGetMemory(2 * sizeof(TexVtxF));
+    v[0].u = 0.0f;           v[0].v = 0.0f;
+    v[0].x = x;              v[0].y = y;              v[0].z = 0.0f;
+    v[1].u = (float)texside; v[1].v = (float)texside;
+    v[1].x = x + w;          v[1].y = y + h;          v[1].z = 0.0f;
     sceGuDrawArray(GU_SPRITES,
-                   GU_TEXTURE_16BIT | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, v);
+                   GU_TEXTURE_32BITF | GU_VERTEX_32BITF | GU_TRANSFORM_2D,
+                   2, 0, v);
+}
+
+void gfx_blit_raw_ex(const unsigned int *pixels, int texside,
+                     float x, float y, float w, float h, unsigned int tint)
+{
+    /*
+     * GU_TCC_RGB だとアルファが直前のマテリアル色に依存し、
+     * 0 のままだと完全に透明になって何も見えない。
+     * RGBA + MODULATE で tint による減光もここで行う (blit_tex がその構成)。
+     */
+    blit_tex(pixels, texside, x, y, w, h, tint);
 }
 
 void gfx_blit_raw(const unsigned int *pixels, int texside,
                   int x, int y, int w, int h)
 {
-    gu_state_2d();
-    sceGuEnable(GU_TEXTURE_2D);
-    sceGuTexMode(GU_PSM_8888, 0, 0, 0);          /* スウィズルなし */
-    sceGuTexImage(0, texside, texside, texside, pixels);
-    /*
-     * GU_TCC_RGB だとアルファが直前のマテリアル色に依存し、
-     * 0 のままだと完全に透明になって何も見えない。RGBA + 不透明白で固定する。
-     */
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-    sceGuColor(0xFFFFFFFF);
-    TexVtx *v = sceGuGetMemory(2 * sizeof(TexVtx));
-    v[0].u = 0;       v[0].v = 0;       v[0].x = x;     v[0].y = y;     v[0].z = 0;
-    v[1].u = texside; v[1].v = texside; v[1].x = x + w; v[1].y = y + h; v[1].z = 0;
-    sceGuDrawArray(GU_SPRITES,
-                   GU_TEXTURE_16BIT | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, v);
+    blit_tex(pixels, texside, (float)x, (float)y, (float)w, (float)h,
+             0xFFFFFFFF);
 }
 
 void gfx_logo(int x, int y, int size)
@@ -348,7 +354,7 @@ void gfx_logo(int x, int y, int size)
     blit_tex(g_logo, LOGO_SIDE, x, y, size, size, 0xFFFFFFFF);
 }
 
-void gfx_glow(int x, int y, int w, int h, int alpha)
+void gfx_glow(float x, float y, float w, float h, int alpha)
 {
     blit_tex(g_glow, GLOW_SIDE, x - w / 4, y - h / 4, w + w / 2, h + h / 2,
              ((unsigned)alpha << 24) | 0x00FFFFFF);
@@ -360,13 +366,13 @@ void gfx_glow(int x, int y, int w, int h, int alpha)
  * 角丸カードの裏に draw_rect の影を敷くと角から黒がはみ出すため、
  * 影も必ずこれを使う。
  */
-void gfx_shadow(int x, int y, int w, int h, int alpha)
+void gfx_shadow(float x, float y, float w, float h, int alpha)
 {
     blit_tex(g_glow, GLOW_SIDE, x - w / 8, y - h / 8 + 3, w + w / 4, h + h / 4,
              ((unsigned)alpha << 24) | 0x00000000);
 }
 
-void gfx_card_fill(int x, int y, int size, unsigned int color)
+void gfx_card_fill(float x, float y, float size, unsigned int color)
 {
     blit_tex(g_card, CARD_TEX_SIDE, x, y, size, size, color);
 }

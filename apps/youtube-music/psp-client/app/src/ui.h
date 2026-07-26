@@ -32,4 +32,12 @@ void ui_chrome(const char *title, const char *hint,
 void ui_now_playing(const char *art_id, const char *title, const char *artist,
                     PlayerState st, int elapsed_sec, int duration_sec);
 
+/*
+ * 画面下に固定表示する「選択中カードの曲情報」パネル。
+ * bottom はパネル下端の Y (再生バーがあるときはその上端を渡す)。
+ * slim が真ならサムネイル無しの細い帯になる (再生バーとの同時表示用)。
+ */
+void ui_selection_info(const char *art_id, const char *title,
+                       const char *subtitle, int bottom, int slim);
+
 #endif

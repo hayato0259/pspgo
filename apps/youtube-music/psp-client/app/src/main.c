@@ -525,11 +525,16 @@ static Screen screen_home_tick(void)
         int base_y = ROW_TOP + row * ROW_PITCH;
         int active = (si == g_section_sel);
 
-        /* 見出し。PC 版の大きな太字タイトルに合わせる */
-        if (active)
+        /* 見出し。PC 版の大きな太字タイトル + 右端にページ位置 (n/m) */
+        if (active) {
             text_bold(MARGIN, base_y, C_TEXT, 0.72f, s->title);
-        else
+            char pos[16];
+            snprintf(pos, sizeof(pos), "%d / %d", s->cursor + 1, s->count);
+            float pw = intraFontMeasureText(gfx_font(), pos) * 0.55f;
+            text(SCR_W - MARGIN - pw, base_y, C_DIM, 0.55f, pos);
+        } else {
             text(MARGIN, base_y, C_DIM, 0.6f, s->title);
+        }
 
         /* 目標スクロール位置へ滑らかに寄せる (XMB 風の慣性) */
         int visible = (SCR_W - MARGIN * 2 + CARD_PITCH - 1) / CARD_PITCH;
@@ -560,7 +565,9 @@ static Screen screen_home_tick(void)
                 continue;
             }
             gfx_shadow(x, y, CARD_SIZE, CARD_SIZE, 0x50);
-            art_draw(it->id, x, y, CARD_SIZE);
+            /* 非アクティブ段は減光してフォーカスの階層を作る */
+            art_draw_ex(it->id, x, y, CARD_SIZE,
+                        active ? 0xFFFFFFFF : C_CARD_DIM);
         }
 
         if (sel_idx >= 0) {
@@ -568,6 +575,7 @@ static Screen screen_home_tick(void)
              * 選択中カード:
              *  - 選択が変わった瞬間から 1.0 → 1.16 倍へイージングで拡大
              *  - 枠線ではなく、XMB 的な白い光彩 (ごくゆっくり呼吸) をまとわせる
+             * 座標・サイズは float のまま描く (整数に丸めるとカクつく)。
              */
             static int prev_sec = -1, prev_cur = -1;
             static float grow = 0.0f;
@@ -576,38 +584,30 @@ static Screen screen_home_tick(void)
                 prev_cur = s->cursor;
                 grow = 0.0f;
             }
-            grow += (1.0f - grow) * 0.18f;
+            grow += (1.0f - grow) * 0.16f;
 
-            int size = CARD_SIZE + (int)(10.0f * grow);
-            int cx = sel_x + CARD_SIZE / 2, cy = base_y + 8 + CARD_SIZE / 2;
-            int x = cx - size / 2, y = cy - size / 2;
+            float size = (float)CARD_SIZE + 10.0f * grow;
+            float cx = sel_x + CARD_SIZE / 2.0f;
+            float cy = base_y + 8 + CARD_SIZE / 2.0f;
+            float x = cx - size / 2.0f, y = cy - size / 2.0f;
 
             int glow_a = 130 + (int)(20.0f * sinf((float)gfx_frame * 0.05f));
 
             gfx_glow(x, y, size, size, glow_a);
             gfx_shadow(x, y, size, size, 0x70);
-            art_draw(g_home_items[sel_idx].id, x, y, size);
-
-            /*
-             * キャプション (題名 + アーティスト) はカードの直下に置く。
-             * PC 版のカード下テキストと同じ配置。1 行に収め、
-             * はみ出す分はクリップする (折り返して次の段に被せない)。
-             */
-            if (active) {
-                ApiItem *it = &g_home_items[sel_idx];
-                float capx = (float)sel_x;
-                if (capx > SCR_W - 180)
-                    capx = SCR_W - 180;
-                int capy = base_y + 8 + CARD_SIZE + 14;
-                int availw = SCR_W - (int)capx - MARGIN;
-
-                text_clipped(capx, capy, availw, C_TEXT, 0.6f, it->title);
-                float tw = intraFontMeasureText(gfx_font(), it->title) * 0.6f;
-                if (it->subtitle[0] && tw + 12 < (float)availw - 40)
-                    text_clipped(capx + tw + 12, capy, availw - (int)tw - 12,
-                                 C_DIM, 0.52f, it->subtitle);
-            }
+            art_draw_ex(g_home_items[sel_idx].id, x, y, size, 0xFFFFFFFF);
         }
+    }
+
+    /*
+     * 選択中カードの曲情報は画面下の固定パネルに出す (PC 版の再生バーと
+     * 同じ構図)。再生中は再生バーの上に細い帯として重ねる。
+     */
+    {
+        int playing = (player_state() != PLAYER_STOPPED && g_playing_index >= 0);
+        if (cur)
+            ui_selection_info(cur->id, cur->title, cur->subtitle,
+                              playing ? SCR_H - BAR_H : SCR_H, playing);
     }
 
     now_playing_bar();
