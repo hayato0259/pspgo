@@ -47,9 +47,19 @@ EBOOT と同じフォルダの `offline/` 配下。
   失敗するので、この経路が実質のオフライン起動導線になる
   (`net_init` の失敗・サーバー不達のどちらでも入れる)
 
-## 検証方法
+## 実装時に踏んだ地雷
 
-`make AUTODEMO=1` はプレイリスト画面で □ (全曲ダウンロード) も自動入力する。
-PPSSPP で走らせた後、`~/.config/ppsspp/PSP/GAME/YTMUSIC/offline/` に
-`.mp3` / `.art` / `index.tsv` が生成されていれば経路が通っている。
-オフライン再生自体の確認は、サーバーを止めて起動 → エラー画面で ○ → 再生。
+- **sceIoRename / sceIoRemove は相対パスを解決しない** (PPSSPP で実測)。
+  `.part` は fopen で書けるのに `.mp3` への改名だけ静かに失敗し、
+  「.part が大量に残り index.tsv が空」という症状になる。
+  EBOOT 相対のファイル操作は stdio (`fopen` / `rename` / `remove`) に統一した
+- SHOTDUMP (アプリ自身のフレームバッファ書き出し) は PPSSPP では真っ白になる。
+  目視確認は winshot (`~/.claude/skills/winshot/winshot.sh PPSSPP out.png`) を使う
+
+## 検証方法 (2026-07-27 実施・全経路確認済み)
+
+1. `make AUTODEMO=1`: ホームとプレイリストで □ (ダウンロード) も自動入力する。
+   PPSSPP で走らせ、`~/.config/ppsspp/PSP/GAME/YTMUSIC/offline/` に
+   `.mp3` / `.art` / `index.tsv` が生成されることを確認
+2. サーバーを止めて再起動 → エラー画面に「○: オフライン再生 (N曲)」→
+   ○ でライブラリ (ローカル .art でアートワーク表示) → ○ でローカル再生が進む

@@ -56,6 +56,9 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
   画面の目視確認は実機でしかできないため、UI の検証は
   「幅の実測」など数値で判定できる方法を使う
 
+- **sceIoRename / sceIoRemove / sceIoOpen は相対パスを解決しない**（PPSSPP で実測。
+  ファイルは作られるのに改名・削除だけ失敗する）。EBOOT 相対のファイル操作は
+  stdio (`fopen`/`rename`/`remove`) を使う。`sceIoMkdir` は相対でも動く
 - **BSD ソケット関数 (socket/connect/recv) を使わない** — 新 NID で PPSSPP 未実装。
   `sceNetInet*` を直接呼ぶ
 - **PPSSPP のソケットは EAGAIN を返す** — recv はリトライラッパー経由で呼ぶ

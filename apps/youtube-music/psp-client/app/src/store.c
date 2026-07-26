@@ -154,8 +154,9 @@ int store_remove(int i)
             g_items[j] = g_items[j + 1];
         g_count--;
         rc = write_index();
-        sceIoRemove(mp3);
-        sceIoRemove(art);
+        /* sceIoRemove は相対パスを解決しないため stdio の remove を使う */
+        remove(mp3);
+        remove(art);
     }
     unlock();
     return rc;

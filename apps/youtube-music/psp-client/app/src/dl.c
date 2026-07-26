@@ -42,9 +42,9 @@ static void save_art(const char *id)
     store_art_path(id, path, sizeof(path));
 
     /* 既にあれば取り直さない */
-    SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
-    if (fd >= 0) {
-        sceIoClose(fd);
+    FILE *probe = fopen(path, "rb");
+    if (probe) {
+        fclose(probe);
         return;
     }
 
@@ -99,13 +99,15 @@ static int save_mp3(const ApiTrack *t, char *final_path, int final_size)
     net_close(sock);
 
     /* 1 分の曲でも約 1MB になる。極端に小さいものはエラー本文とみなす */
+    /* ※ sceIoRename/sceIoRemove は相対パスを解決しない (PPSSPP で実測)。
+       fopen と同じ経路で cwd を解決する stdio の rename/remove を使う */
     if (!ok || g_quit || total < 64 * 1024) {
-        sceIoRemove(part);
+        remove(part);
         return -2;
     }
-    sceIoRemove(final_path);   /* 残骸があれば上書きのため消す */
-    if (sceIoRename(part, final_path) < 0) {
-        sceIoRemove(part);
+    remove(final_path);   /* 残骸があれば上書きのため消す */
+    if (rename(part, final_path) != 0) {
+        remove(part);
         return -3;
     }
     return total;

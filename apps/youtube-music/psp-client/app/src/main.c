@@ -105,9 +105,11 @@ static void input_update(void)
             fired = 1;
             g_pressed |= PSP_CTRL_CIRCLE;
         }
-        /* プレイリスト画面では ○ の前に □ を1回押し、
-           ダウンロード経路 (dl.c → store.c) も自動で通す */
-        if (g_demo_screen == SCR_PLAYLIST && held == 140)
+        /* ホームとプレイリストでは ○ の前に □ を1回押し、
+           ダウンロード経路 (dl.c → store.c) も自動で通す
+           (ホームの最初のカードが単曲でプレイリストを経由しない日もあるため両方) */
+        if ((g_demo_screen == SCR_HOME || g_demo_screen == SCR_PLAYLIST) &&
+            held == 140)
             g_pressed |= PSP_CTRL_SQUARE;
     }
 #endif
