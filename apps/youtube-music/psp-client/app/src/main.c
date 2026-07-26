@@ -15,6 +15,7 @@
 #include <pspctrl.h>
 #include <pspgu.h>
 #include <math.h>
+#include <stdlib.h>
 #include <string.h>
 #include <stdio.h>
 #include "common.h"
@@ -142,7 +143,19 @@ static int g_track_count = 0;
 static int g_track_sel = 0, g_track_scroll = 0;
 static char g_pl_title[128];
 
+typedef enum {
+    PLAY_MODE_NORMAL,
+    PLAY_MODE_SHUFFLE,
+    PLAY_MODE_REPEAT_ALL,
+    PLAY_MODE_REPEAT_ONE,
+    PLAY_MODE_COUNT
+} PlayMode;
+
+#define SHUFFLE_HISTORY_WORDS ((API_MAX_TRACKS + 31) / 32)
+
 static int g_playing_index = -1; /* g_tracks 内の再生中インデックス */
+static PlayMode g_play_mode = PLAY_MODE_NORMAL;
+static unsigned int g_shuffle_history[SHUFFLE_HISTORY_WORDS];
 static int g_auth = 0;
 static int g_can_login = 0;      /* サーバーに OAuth クライアントが設定済みか */
 static char g_account[64] = "-";
@@ -150,6 +163,84 @@ static char g_error[192] = "";
 static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
 static int g_off_sel = 0, g_off_scroll = 0;   /* オフライン画面のカーソル */
+
+static void start_track(int index);
+
+static int shuffle_track_played(int index)
+{
+    return (g_shuffle_history[index / 32] & (1U << (index % 32))) != 0;
+}
+
+static void shuffle_mark_played(int index)
+{
+    if (index >= 0 && index < g_track_count)
+        g_shuffle_history[index / 32] |= 1U << (index % 32);
+}
+
+static void shuffle_history_reset(void)
+{
+    memset(g_shuffle_history, 0, sizeof(g_shuffle_history));
+    shuffle_mark_played(g_playing_index);
+}
+
+static int next_track_index(void)
+{
+    if (g_playing_index < 0 || g_playing_index >= g_track_count ||
+        g_track_count <= 0)
+        return -1;
+
+    switch (g_play_mode) {
+    case PLAY_MODE_NORMAL:
+        return (g_playing_index + 1 < g_track_count)
+                   ? g_playing_index + 1 : -1;
+    case PLAY_MODE_SHUFFLE: {
+        int remaining = 0;
+        for (int i = 0; i < g_track_count; i++)
+            if (!shuffle_track_played(i))
+                remaining++;
+        if (remaining == 0)
+            return -1;
+
+        int pick = rand() % remaining;
+        for (int i = 0; i < g_track_count; i++) {
+            if (shuffle_track_played(i))
+                continue;
+            if (pick-- == 0) {
+                shuffle_mark_played(i);
+                return i;
+            }
+        }
+        return -1;
+    }
+    case PLAY_MODE_REPEAT_ALL:
+        return (g_playing_index + 1) % g_track_count;
+    case PLAY_MODE_REPEAT_ONE:
+        return g_playing_index;
+    case PLAY_MODE_COUNT:
+        break;
+    }
+    return -1;
+}
+
+static void cycle_play_mode(void)
+{
+    g_play_mode = (PlayMode)((g_play_mode + 1) % PLAY_MODE_COUNT);
+    if (g_play_mode == PLAY_MODE_SHUFFLE)
+        shuffle_history_reset();
+}
+
+static const char *play_mode_label(void)
+{
+    switch (g_play_mode) {
+    case PLAY_MODE_SHUFFLE:    return "シャッフル";
+    case PLAY_MODE_REPEAT_ALL: return "リピート";
+    case PLAY_MODE_REPEAT_ONE: return "1曲リピート";
+    case PLAY_MODE_NORMAL:
+    case PLAY_MODE_COUNT:
+        return "";
+    }
+    return "";
+}
 
 static void scroll_to(int sel, int *scroll)
 {
@@ -612,6 +703,7 @@ static Screen screen_home_tick(void)
                 g_track_sel = 0;
                 g_track_scroll = 0;
                 g_playing_index = -1;
+                shuffle_history_reset();
                 return SCR_PLAYLIST;
             }
         } else if (cur->kind == 'V') {
@@ -623,8 +715,9 @@ static Screen screen_home_tick(void)
             g_tracks[0].duration_sec = 0;
             g_track_count = 1;
             g_track_sel = 0;
-            g_playing_index = 0;
-            player_start(g_tracks[0].video_id, 0);
+            g_playing_index = -1;
+            shuffle_history_reset();
+            start_track(0);
             return SCR_PLAYER;
         }
     }
@@ -805,6 +898,8 @@ static void start_track(int index)
     if (index < 0 || index >= g_track_count)
         return;
     g_playing_index = index;
+    if (g_play_mode == PLAY_MODE_SHUFFLE)
+        shuffle_mark_played(index);
     player_start(g_tracks[index].video_id, g_tracks[index].duration_sec);
 }
 
@@ -828,6 +923,9 @@ static Screen screen_playlist_tick(void)
     }
     if ((g_pressed & PSP_CTRL_CIRCLE) && g_track_count > 0) {
         snd_play(SND_OK);
+        /* 手動で曲を選び直したらシャッフルの一巡をやり直す */
+        g_playing_index = -1;
+        shuffle_history_reset();
         start_track(g_track_sel);
         return SCR_PLAYER;
     }
@@ -903,6 +1001,8 @@ static Screen offline_play(int sel)
     snprintf(g_pl_title, sizeof(g_pl_title), "オフライン ライブラリ");
     g_track_sel = sel - start;
     g_track_scroll = 0;
+    g_playing_index = -1;
+    shuffle_history_reset();
     start_track(sel - start);
     return SCR_PLAYER;
 }
@@ -1015,20 +1115,34 @@ static Screen screen_player_tick(void)
         snd_play(SND_OK);
         player_toggle_pause();
     }
-    if ((g_pressed & PSP_CTRL_LTRIGGER) && g_playing_index > 0) {
-        snd_play(SND_MOVE);
-        start_track(g_playing_index - 1);
+    if (g_pressed & PSP_CTRL_SELECT) {
+        snd_play(SND_OK);
+        cycle_play_mode();
     }
-    if ((g_pressed & PSP_CTRL_RTRIGGER) && g_playing_index + 1 < g_track_count) {
-        snd_play(SND_MOVE);
-        start_track(g_playing_index + 1);
+    if (g_pressed & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) {
+        int index = -1;
+        if (g_play_mode == PLAY_MODE_SHUFFLE) {
+            index = next_track_index();
+        } else if ((g_pressed & PSP_CTRL_LTRIGGER) && g_playing_index > 0) {
+            index = g_playing_index - 1;
+        } else if ((g_pressed & PSP_CTRL_RTRIGGER) &&
+                   g_playing_index + 1 < g_track_count) {
+            index = g_playing_index + 1;
+        }
+        if (index >= 0) {
+            snd_play(SND_MOVE);
+            start_track(index);
+        } else if (g_play_mode == PLAY_MODE_SHUFFLE) {
+            player_stop();
+        }
     }
 
     ApiTrack *t = (g_playing_index >= 0) ? &g_tracks[g_playing_index] : NULL;
 
     ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
     ui_frame_begin();
-    ui_chrome("再生中", "△: 一時停止    L/R: 前後の曲    ×: 一覧へ",
+    ui_chrome("再生中",
+              "△: 一時停止    L/R: 前後の曲    SELECT: 再生モード    ×: 一覧へ",
               g_auth, g_account);
     if (t) {
         /* 左に大きなアートワーク (柔らかい影のみ、枠なし)、右に曲情報 */
@@ -1047,6 +1161,13 @@ static Screen screen_player_tick(void)
             (st == PLAYER_ERROR)     ? "エラー" :
             (st == PLAYER_PLAYING)   ? "再生中" : "";
         text(tx, 132, (st == PLAYER_ERROR) ? C_ACCENT : C_DIM, 0.62f, st_label);
+        const char *mode_label = play_mode_label();
+        if (mode_label[0]) {
+            float mode_x = tx;
+            if (st_label[0])
+                mode_x += gfx_text_width(0.62f, st_label) + 10.0f;
+            text(mode_x, 132, C_DIM, 0.6f, mode_label);
+        }
         if (st == PLAYER_ERROR) {
             char e[64];
             snprintf(e, sizeof(e), "code: 0x%08X", player_last_error());
@@ -1089,6 +1210,7 @@ int main(void)
     setup_callbacks();
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
+    srand((unsigned int)sceKernelGetSystemTimeLow());
 
     net_load_server_config();   /* server.txt があれば接続先を差し替える */
     if (gfx_init() < 0) {
@@ -1110,8 +1232,9 @@ int main(void)
 
         /* 曲が終わったら、どの画面にいても自動で次の曲へ進む */
         if (player_state() == PLAYER_FINISHED && g_playing_index >= 0) {
-            if (g_playing_index + 1 < g_track_count)
-                start_track(g_playing_index + 1);
+            int index = next_track_index();
+            if (index >= 0)
+                start_track(index);
             else
                 player_stop();
         }
