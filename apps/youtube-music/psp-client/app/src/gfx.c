@@ -401,6 +401,12 @@ void text_clipped(float x, float y, int w, unsigned int color, float size,
     sceGuScissor(0, 0, SCR_W, SCR_H);
 }
 
+float gfx_text_width(float size, const char *s)
+{
+    intraFontSetStyle(g_font, size, 0xFFFFFFFF, 0, 0.0f, 0);
+    return intraFontMeasureText(g_font, s);
+}
+
 /* --- QR ------------------------------------------------------------------ */
 
 void draw_qr(const unsigned char *qr, int size, int x, int y, int scale)

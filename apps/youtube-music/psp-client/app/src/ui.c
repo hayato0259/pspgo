@@ -56,8 +56,8 @@ void ui_top_bar(int auth, const char *account)
     gfx_logo(MARGIN, 4, 20);
     text_bold(MARGIN + 26, 19, C_TEXT, 0.82f, "Music");
     if (auth && account[0] && account[0] != '-') {
-        float w = intraFontMeasureText(gfx_font(), account);
-        text(SCR_W - MARGIN - w * 0.6f, 19, C_DIM, 0.6f, account);
+        float w = gfx_text_width(0.6f, account);
+        text(SCR_W - MARGIN - w, 19, C_DIM, 0.6f, account);
     }
 }
 
@@ -67,7 +67,7 @@ void ui_chrome(const char *title, const char *hint,
     gfx_logo(8, 4, 16);
     text_bold(30, 17, C_TEXT, 0.85f, title);
     if (auth)
-        text(SCR_W - 8 - intraFontMeasureText(gfx_font(), account) * 0.7f, 17,
+        text(SCR_W - 8 - gfx_text_width(0.7f, account), 17,
              C_DIM, 0.7f, account);
     draw_rect(0, 24, SCR_W, 1, C_LINE);
     draw_rect(0, SCR_H - 18, SCR_W, 18, 0xFF0A0A0A);

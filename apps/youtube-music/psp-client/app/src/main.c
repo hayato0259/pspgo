@@ -243,17 +243,16 @@ static void draw_splash(const char *status, int is_error)
     ui_frame_begin();
 
     int lw = 36;
-    float tw = intraFontMeasureText(gfx_font(), "Music") * 0.95f;
+    float tw = gfx_text_width(0.95f, "Music");
     int x0 = (int)((SCR_W - (lw + 10 + tw)) / 2.0f);
     int ly = 96;
     gfx_logo(x0, ly, lw);
     text_bold(x0 + lw + 10, ly + lw / 2 + 8, C_TEXT, 0.95f, "Music");
 
     if (status && status[0]) {
-        float sw = intraFontMeasureText(gfx_font(), status) *
-                   (is_error ? 0.7f : 0.65f);
-        text((SCR_W - sw) / 2.0f, 168, is_error ? C_ACCENT : C_DIM,
-             is_error ? 0.7f : 0.65f, status);
+        float ss = is_error ? 0.7f : 0.65f;
+        float sw = gfx_text_width(ss, status);
+        text((SCR_W - sw) / 2.0f, 168, is_error ? C_ACCENT : C_DIM, ss, status);
     }
     if (!is_error) {
         /* 進行中を示す点滅ドット */
@@ -441,21 +440,31 @@ static Screen screen_login_tick(void)
 static Screen screen_home_tick(void)
 {
     Section *sec = (g_section_sel < g_section_count) ? &g_sections[g_section_sel] : NULL;
+    int compact = (sec && section_compact(sec));
 
-    /* 左右でカード移動、上下でセクション移動 (PC 版の横スクロールと同じ操作) */
+    /*
+     * 操作系。
+     *  - カルーセル: 左右でカード移動、上下でセクション移動
+     *  - 行リスト:   上下で曲移動 (端まで行くと隣のセクションへ)、
+     *                左右で 1 ページ (4 件) 送り
+     *  - L/R トリガー: どちらの形式でも 1 ページ分まとめて送る
+     */
+    int page_step = compact ? 4
+                  : (SCR_W - MARGIN * 2 - CARD_SIZE) / CARD_PITCH + 1;
+
     if (sec && (g_pressed & PSP_CTRL_LEFT) && sec->cursor > 0) {
-        sec->cursor--;
+        sec->cursor -= compact ? page_step : 1;
+        if (sec->cursor < 0) sec->cursor = 0;
         snd_play(SND_MOVE);
     }
     if (sec && (g_pressed & PSP_CTRL_RIGHT) && sec->cursor < sec->count - 1) {
-        sec->cursor++;
+        sec->cursor += compact ? page_step : 1;
+        if (sec->cursor > sec->count - 1) sec->cursor = sec->count - 1;
         snd_play(SND_MOVE);
     }
-    /* L/R トリガー: 1 ページ分まとめて送る (リストは 4 件、カルーセルは 6 件) */
     if (sec && (g_pressed & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER))) {
-        int step = section_compact(sec) ? 4
-                 : (SCR_W - MARGIN * 2 - CARD_SIZE) / CARD_PITCH + 1;
-        int c = sec->cursor + ((g_pressed & PSP_CTRL_RTRIGGER) ? step : -step);
+        int c = sec->cursor +
+                ((g_pressed & PSP_CTRL_RTRIGGER) ? page_step : -page_step);
         if (c > sec->count - 1) c = sec->count - 1;
         if (c < 0) c = 0;
         if (c != sec->cursor) {
@@ -464,14 +473,24 @@ static Screen screen_home_tick(void)
         }
     }
     if (g_pressed & PSP_CTRL_UP) {
-        int i = g_section_sel - 1;
-        while (i >= 0 && g_sections[i].count == 0) i--;
-        if (i >= 0) { g_section_sel = i; snd_play(SND_MOVE); }
+        if (compact && sec->cursor > 0) {
+            sec->cursor--;
+            snd_play(SND_MOVE);
+        } else {
+            int i = g_section_sel - 1;
+            while (i >= 0 && g_sections[i].count == 0) i--;
+            if (i >= 0) { g_section_sel = i; snd_play(SND_MOVE); }
+        }
     }
     if (g_pressed & PSP_CTRL_DOWN) {
-        int i = g_section_sel + 1;
-        while (i < g_section_count && g_sections[i].count == 0) i++;
-        if (i < g_section_count) { g_section_sel = i; snd_play(SND_MOVE); }
+        if (compact && sec->cursor < sec->count - 1) {
+            sec->cursor++;
+            snd_play(SND_MOVE);
+        } else {
+            int i = g_section_sel + 1;
+            while (i < g_section_count && g_sections[i].count == 0) i++;
+            if (i < g_section_count) { g_section_sel = i; snd_play(SND_MOVE); }
+        }
     }
     /* 選択中セクションが画面に入るようにする (同時に 2 段まで表示) */
     if (g_section_sel < g_section_top)
@@ -479,22 +498,16 @@ static Screen screen_home_tick(void)
     if (g_section_sel > g_section_top + 1)
         g_section_top = g_section_sel - 1;
 
-    /* SELECT: ログイン / ログアウト */
-    if (g_pressed & PSP_CTRL_SELECT) {
-        if (g_auth) {
-            player_stop();
-            api_logout();
-            g_auth = 0;
-            snprintf(g_account, sizeof(g_account), "-");
-            if (g_can_login) {
-                g_welcome_sel = 0;
-                return SCR_WELCOME;
-            }
-            load_home();
-        } else if (g_can_login) {
-            g_welcome_sel = 0;
-            return SCR_WELCOME;
-        }
+    /*
+     * SELECT: 未ログイン時のみログイン画面へ。
+     * ログイン済みでのログアウトは割り当てない —
+     * PPSSPP の既定キーで SELECT はスペースキーであり、
+     * 「再生しようとしてスペースを押す → 即ログアウト」の誤爆が起きたため。
+     * ログアウトはサーバー側 (auth/ ディレクトリの削除) で行う。
+     */
+    if ((g_pressed & PSP_CTRL_SELECT) && !g_auth && g_can_login) {
+        g_welcome_sel = 0;
+        return SCR_WELCOME;
     }
 
     ApiItem *cur = selected_card();
@@ -557,8 +570,8 @@ static Screen screen_home_tick(void)
             text_bold(MARGIN, base_y, C_TEXT, 0.72f, s->title);
             char pos[16];
             snprintf(pos, sizeof(pos), "%d / %d", s->cursor + 1, s->count);
-            float pw = intraFontMeasureText(gfx_font(), pos) * 0.55f;
-            text(SCR_W - MARGIN - pw, base_y, C_DIM, 0.55f, pos);
+            text(SCR_W - MARGIN - gfx_text_width(0.55f, pos), base_y,
+                 C_DIM, 0.55f, pos);
         } else {
             text(MARGIN, base_y, C_DIM, 0.6f, s->title);
         }

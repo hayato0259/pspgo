@@ -59,6 +59,13 @@ void text_bold(float x, float y, unsigned int color, float size, const char *s);
 void text_clipped(float x, float y, int w, unsigned int color, float size,
                   const char *s);
 
+/*
+ * サイズ size で描いたときの幅 (px)。
+ * intraFontMeasureText は「直前に SetStyle したサイズ」で測るため、
+ * 素で呼ぶと直前の描画に引きずられる。必ずこちらを使う。
+ */
+float gfx_text_width(float size, const char *s);
+
 /* QR コード (1 バイト 1 マスのビット行列) */
 void draw_qr(const unsigned char *qr, int size, int x, int y, int scale);
 
