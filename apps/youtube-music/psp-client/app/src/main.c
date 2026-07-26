@@ -160,6 +160,7 @@ static int g_auth = 0;
 static int g_can_login = 0;      /* サーバーに OAuth クライアントが設定済みか */
 static char g_account[64] = "-";
 static char g_error[192] = "";
+static int g_radio_error_frames = 0;
 static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
 static int g_off_sel = 0, g_off_scroll = 0;   /* オフライン画面のカーソル */
@@ -1103,6 +1104,42 @@ static Screen screen_offline_tick(void)
 
 /* --- プレイヤー --- */
 
+/*
+ * 再生中の音声には触れず、ラジオ取得に成功したときだけキューを置き換える。
+ * 再生モードは維持し、インデックス依存のシャッフル履歴だけ作り直す。
+ */
+static int replace_queue_with_radio(void)
+{
+    if (g_playing_index < 0 || g_playing_index >= g_track_count)
+        return -1;
+
+    ApiTrack current = g_tracks[g_playing_index];
+    static ApiTrack radio_tracks[API_MAX_TRACKS];
+    char radio_title[128];
+    int n = api_radio(current.video_id, radio_title, sizeof(radio_title),
+                      radio_tracks, API_MAX_TRACKS);
+    if (n <= 0)
+        return -1;
+
+    int insert_current = strcmp(radio_tracks[0].video_id,
+                                current.video_id) != 0;
+    int radio_count = n;
+    if (insert_current && radio_count >= API_MAX_TRACKS)
+        radio_count = API_MAX_TRACKS - 1;
+
+    if (insert_current)
+        g_tracks[0] = current;
+    memcpy(&g_tracks[insert_current], radio_tracks,
+           (size_t)radio_count * sizeof(ApiTrack));
+    g_track_count = radio_count + insert_current;
+    g_playing_index = 0;
+    g_track_sel = 0;
+    g_track_scroll = 0;
+    snprintf(g_pl_title, sizeof(g_pl_title), "ラジオ: %.88s", current.title);
+    shuffle_history_reset();
+    return 0;
+}
+
 static Screen screen_player_tick(void)
 {
     PlayerState st = player_state();
@@ -1118,6 +1155,15 @@ static Screen screen_player_tick(void)
     if (g_pressed & PSP_CTRL_SELECT) {
         snd_play(SND_OK);
         cycle_play_mode();
+    }
+    if ((g_pressed & PSP_CTRL_SQUARE) &&
+        g_playing_index >= 0 && g_playing_index < g_track_count) {
+        if (replace_queue_with_radio() == 0) {
+            g_radio_error_frames = 0;
+            snd_play(SND_OK);
+        } else {
+            g_radio_error_frames = 150;
+        }
     }
     if (g_pressed & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) {
         int index = -1;
@@ -1142,7 +1188,7 @@ static Screen screen_player_tick(void)
     ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
     ui_frame_begin();
     ui_chrome("再生中",
-              "△: 一時停止    L/R: 前後の曲    SELECT: 再生モード    ×: 一覧へ",
+              "△: 一時停止    □: ラジオ    L/R: 前後の曲    SELECT: 再生モード    ×: 一覧へ",
               g_auth, g_account);
     if (t) {
         /* 左に大きなアートワーク (柔らかい影のみ、枠なし)、右に曲情報 */
@@ -1199,6 +1245,11 @@ static Screen screen_player_tick(void)
         }
     } else {
         text(24, 120, C_DIM, 0.75f, "(再生していません)");
+    }
+    if (g_radio_error_frames > 0) {
+        text_clipped(168, 176, SCR_W - 184, C_ACCENT, 0.58f,
+                     "ラジオを取得できませんでした");
+        g_radio_error_frames--;
     }
     dl_status_line();
     gfx_frame_end();
