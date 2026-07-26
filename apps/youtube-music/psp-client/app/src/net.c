@@ -163,6 +163,29 @@ int http_open_stream(const char *host, int port, const char *path)
     return http_request(host, port, path);
 }
 
+int http_get_bin(const char *host, int port, const char *path,
+                 void *buf, int bufsize)
+{
+    int sock = http_request(host, port, path);
+    if (sock < 0)
+        return sock;
+
+    unsigned char *dst = buf;
+    int total = 0;
+    while (total < bufsize) {
+        int got = net_recv_wait(sock, dst + total, bufsize - total);
+        if (got < 0) {
+            net_close(sock);
+            return -6;
+        }
+        if (got == 0)
+            break;  /* サーバーが閉じた = 本文終端 */
+        total += got;
+    }
+    net_close(sock);
+    return total;
+}
+
 int http_get(const char *host, int port, const char *path, char *buf, int bufsize)
 {
     int sock = http_request(host, port, path);

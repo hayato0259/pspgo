@@ -10,6 +10,10 @@ int net_recv_wait(int sock, void *buf, int len);
 /* HTTP GET してボディ全体を buf に受け取る。戻り値: ボディ長 / <0 エラー */
 int http_get(const char *host, int port, const char *path, char *buf, int bufsize);
 
+/* バイナリ用。終端文字を付けず、受信バイト数を返す。<0 エラー */
+int http_get_bin(const char *host, int port, const char *path,
+                 void *buf, int bufsize);
+
 /* HTTP GET してヘッダ読み飛ばし後のソケットを返す (ストリーミング用)。<0 エラー */
 int http_open_stream(const char *host, int port, const char *path);
 

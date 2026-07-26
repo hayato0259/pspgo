@@ -93,11 +93,12 @@ def get_yt() -> YTMusic:
     with _yt_lock:
         if _yt is None:
             if BROWSER_FILE.exists():
-                _yt = YTMusic(str(BROWSER_FILE))
+                _yt = YTMusic(str(BROWSER_FILE), language="ja", location="JP")
             elif TOKEN_FILE.exists() and can_login():
-                _yt = YTMusic(str(TOKEN_FILE), oauth_credentials=credentials())
+                _yt = YTMusic(str(TOKEN_FILE), oauth_credentials=credentials(),
+                              language="ja", location="JP")
             else:
-                _yt = YTMusic()
+                _yt = YTMusic(language="ja", location="JP")
         return _yt
 
 
@@ -109,7 +110,7 @@ def get_yt_public() -> YTMusic:
     global _yt_public
     with _yt_lock:
         if _yt_public is None:
-            _yt_public = YTMusic()
+            _yt_public = YTMusic(language="ja", location="JP")
         return _yt_public
 
 
@@ -147,6 +148,59 @@ def auth_kind() -> str:
 
 _login = {"device_code": None, "expires_at": 0}
 _login_lock = threading.Lock()
+
+
+# --- アートワーク配信 ------------------------------------------------------
+#
+# PSP に画像デコーダを持たせないため、サーバー側で縮小して
+# 生ピクセル (RGBA 8888) にしてから送る。PSP のテクスチャは辺が 2 の冪
+# である必要があるので、正方形の固定サイズに揃える。
+
+ART_SIZE = 64
+_art_urls: dict = {}     # id -> サムネイル URL
+_art_cache: dict = {}    # (id, size) -> 生ピクセル
+_art_lock = threading.Lock()
+
+
+def remember_art(item_id: str, thumbnails) -> None:
+    """一覧を作るときにサムネイル URL を覚えておく。"""
+    if not item_id or not thumbnails:
+        return
+    # 必要サイズ以上で最小のものを選ぶ (無ければ最大)
+    usable = [t for t in thumbnails if t.get("width", 0) >= ART_SIZE]
+    chosen = min(usable, key=lambda t: t["width"]) if usable else \
+        max(thumbnails, key=lambda t: t.get("width", 0))
+    url = chosen.get("url")
+    if url:
+        with _art_lock:
+            _art_urls[item_id] = url
+
+
+def art_pixels(item_id: str, size: int) -> bytes:
+    """id に対応するアートワークを size x size の RGBA 生ピクセルで返す。"""
+    key = (item_id, size)
+    with _art_lock:
+        if key in _art_cache:
+            return _art_cache[key]
+        url = _art_urls.get(item_id)
+    if not url:
+        raise KeyError("アートワークの URL が不明です (先に一覧を取得してください)")
+
+    import io
+    from PIL import Image
+    import requests
+
+    res = requests.get(url, timeout=15)
+    res.raise_for_status()
+    img = Image.open(io.BytesIO(res.content)).convert("RGBA")
+    img = img.resize((size, size), Image.LANCZOS)
+    data = img.tobytes()   # R,G,B,A の並び = PSP の GU_PSM_8888 と同じ
+
+    with _art_lock:
+        if len(_art_cache) > 256:
+            _art_cache.clear()
+        _art_cache[key] = data
+    return data
 
 
 def qr_line(url: str) -> str:
@@ -288,6 +342,8 @@ def tsv_home() -> str:
         lines.append(f"section\t{clean(section.get('title'))}")
         for item in section.get("contents", []):
             title = clean(item.get("title"))
+            remember_art(item.get("playlistId") or item.get("videoId"),
+                         item.get("thumbnails"))
             if item.get("playlistId"):
                 sub = clean(item.get("description")) or clean(artists_of(item))
                 lines.append(f"playlist\t{clean(item['playlistId'])}\t{title}\t{sub}")
@@ -313,6 +369,7 @@ def tsv_playlist(pid: str) -> str:
         vid = t.get("videoId")
         if not vid:
             continue
+        remember_art(vid, t.get("thumbnails"))
         dur = t.get("duration_seconds") or parse_len(t.get("length") or t.get("duration"))
         lines.append(
             f"track\t{clean(vid)}\t{clean(t.get('title'))}\t{clean(artists_of(t))}\t{dur}"
@@ -416,6 +473,23 @@ class Handler(BaseHTTPRequestHandler):
         except Exception as e:
             self.log_message("api error: %r", e)
             self._text(f"error\t{clean(e)}\n", code=502)
+            return
+
+        if url.path == "/art" and "id" in q:
+            size = int(q.get("s", [str(ART_SIZE)])[0])
+            if size not in (32, 64, 128):
+                size = ART_SIZE
+            try:
+                data = art_pixels(q["id"][0], size)
+            except Exception as e:
+                self.log_message("art 取得失敗 (%s): %r", q["id"][0], e)
+                self._text("error\tアートワークを取得できません\n", code=404)
+                return
+            self.send_response(200)
+            self.send_header("Content-Type", "application/octet-stream")
+            self.send_header("Content-Length", str(len(data)))
+            self.end_headers()
+            self.wfile.write(data)
             return
 
         if url.path == "/stream" and "file" in q:

@@ -24,6 +24,7 @@
 #include "api.h"
 #include "player.h"
 #include "login.h"
+#include "art.h"
 
 PSP_MODULE_INFO("ytmusic", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -298,6 +299,24 @@ static ApiItem g_home_items[API_MAX_ITEMS];
 static int g_home_count = 0;
 static int g_home_sel = 0, g_home_scroll = 0;
 
+/*
+ * ホームは PC 版 YouTube Music と同じ構造で見せる:
+ * セクション見出し + 横並びのカード (アートワーク)。
+ * 左右でカード移動、上下でセクション移動。
+ */
+#define MAX_SECTIONS 12
+typedef struct {
+    char title[128];
+    int first;      /* g_home_items 内の最初のカードの位置 */
+    int count;
+    int cursor;     /* このセクション内で選択中のカード */
+} Section;
+
+static Section g_sections[MAX_SECTIONS];
+static int g_section_count = 0;
+static int g_section_sel = 0;    /* 選択中のセクション */
+static int g_section_top = 0;    /* 画面最上部に表示するセクション */
+
 static ApiTrack g_tracks[API_MAX_TRACKS];
 static int g_track_count = 0;
 static int g_track_sel = 0, g_track_scroll = 0;
@@ -312,8 +331,30 @@ static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う
 
 /* --- リスト描画共通 --- */
 #define LIST_TOP 42
-#define LIST_ROWS 12
+#define LIST_ROWS 11
 #define ROW_H 18
+
+/* ホーム (カルーセル) のレイアウト。PC 版の構造を 480x272 に落とし込む */
+#define CARD_SIZE  64
+#define CARD_PITCH 72
+#define ROW_TOP    44    /* 1 段目のセクション見出しのベースライン */
+#define ROW_PITCH  92    /* セクション 1 段の高さ */
+#define INFO_Y     222   /* 選択中カードの題名を出す帯 */
+
+/* YouTube Music 風のトップバー (赤いロゴ + アカウント名) */
+static void draw_top_bar(void)
+{
+    draw_rect(0, 0, SCR_W, 26, 0xFF17100C);
+    /* 赤い丸 + 白い三角で再生ボタン風のロゴにする */
+    draw_rect(10, 7, 12, 12, C_ACCENT);
+    draw_rect(14, 10, 4, 6, 0xFFFFFFFF);
+    text(28, 19, C_TEXT, 0.8f, "Music");
+    if (g_auth && g_account[0] && g_account[0] != '-') {
+        float w = intraFontMeasureText(g_font, g_account);
+        text(SCR_W - 10 - w * 0.62f, 18, C_DIM, 0.62f, g_account);
+    }
+    draw_rect(0, 26, SCR_W, 1, 0xFF30201A);
+}
 
 static void scroll_to(int sel, int *scroll)
 {
@@ -335,21 +376,53 @@ static void draw_chrome(const char *title, const char *hint)
     text(8, SCR_H - 5, C_DIM, 0.65f, hint);
 }
 
-/* 再生中ミニ表示 (下部バーの上) */
+/*
+ * 画面下の再生バー。PC 版と同じ構成にする:
+ * アートワーク + 曲名 / アーティスト + 経過時間 + 進捗バー。
+ */
+#define BAR_H 32
+
 static void draw_now_playing_bar(void)
 {
     PlayerState st = player_state();
-    if (st == PLAYER_STOPPED || st == PLAYER_ERROR || g_playing_index < 0)
+    if (st == PLAYER_STOPPED || g_playing_index < 0)
         return;
+
     ApiTrack *t = &g_tracks[g_playing_index];
-    char line[160];
-    const char *mark = (st == PLAYER_PAUSED) ? "||" :
-                       (st == PLAYER_BUFFERING) ? ".." : ">";
-    snprintf(line, sizeof(line), "%s %s - %s  [%d:%02d]",
-             mark, t->title, t->artist,
-             player_elapsed_sec() / 60, player_elapsed_sec() % 60);
-    draw_rect(0, SCR_H - 36, SCR_W, 18, 0xFF351F12);
-    text(8, SCR_H - 23, C_HEADER, 0.65f, line);
+    int top = SCR_H - BAR_H;
+
+    draw_rect(0, top, SCR_W, BAR_H, 0xFF1A120E);
+    draw_rect(0, top, SCR_W, 1, 0xFF30201A);
+
+    art_draw(t->video_id, 3, top + 3, 26);
+
+    const char *mark = (st == PLAYER_PAUSED)    ? "II" :
+                       (st == PLAYER_BUFFERING) ? "..." :
+                       (st == PLAYER_ERROR)     ? "!"  : ">";
+    text(34, top + 14, C_ACCENT, 0.7f, mark);
+
+    intraFontSetStyle(g_font, 0.68f, C_TEXT, 0, 0.0f, 0);
+    intraFontPrintColumnEx(g_font, 48, top + 13, 250, t->title, 40);
+    intraFontSetStyle(g_font, 0.58f, C_DIM, 0, 0.0f, 0);
+    intraFontPrintColumnEx(g_font, 48, top + 26, 250, t->artist, 40);
+
+    int el = player_elapsed_sec();
+    char tm[32];
+    if (t->duration_sec > 0)
+        snprintf(tm, sizeof(tm), "%d:%02d / %d:%02d", el / 60, el % 60,
+                 t->duration_sec / 60, t->duration_sec % 60);
+    else
+        snprintf(tm, sizeof(tm), "%d:%02d", el / 60, el % 60);
+    text(SCR_W - 78, top + 14, C_DIM, 0.6f, tm);
+
+    /* 進捗バー */
+    int bw = SCR_W - 8;
+    draw_rect(4, SCR_H - 4, bw, 2, 0xFF3A2A22);
+    if (t->duration_sec > 0) {
+        int w = bw * el / t->duration_sec;
+        if (w > bw) w = bw;
+        draw_rect(4, SCR_H - 4, w, 2, C_ACCENT);
+    }
 }
 
 /* --- 各画面 --- */
@@ -367,11 +440,57 @@ static int load_home(void)
                      "ホームを取得できません (通信エラー %d)", g_home_count);
         return -1;
     }
+    /* section 行を見出しに、その後に続く行をカードとしてまとめる */
+    g_section_count = 0;
+    for (int i = 0; i < g_home_count; i++) {
+        ApiItem *it = &g_home_items[i];
+        if (it->kind == 'S') {
+            if (g_section_count >= MAX_SECTIONS)
+                break;
+            Section *s = &g_sections[g_section_count++];
+            snprintf(s->title, sizeof(s->title), "%s", it->title);
+            s->first = i + 1;
+            s->count = 0;
+            s->cursor = 0;
+        } else if (g_section_count > 0) {
+            Section *s = &g_sections[g_section_count - 1];
+            if (s->first + s->count == i)
+                s->count++;
+        }
+    }
+    /* 見出しの無い項目しか無い場合は、ひとまとめにして見せる */
+    if (g_section_count == 0 && g_home_count > 0) {
+        Section *s = &g_sections[g_section_count++];
+        snprintf(s->title, sizeof(s->title), "おすすめ");
+        s->first = 0;
+        s->count = g_home_count;
+        s->cursor = 0;
+    }
+
+    g_section_sel = 0;
+    g_section_top = 0;
+    while (g_section_sel < g_section_count && g_sections[g_section_sel].count == 0)
+        g_section_sel++;
+    if (g_section_sel >= g_section_count)
+        g_section_sel = 0;
+
     g_home_sel = 0;
     g_home_scroll = 0;
-    while (g_home_sel < g_home_count && g_home_items[g_home_sel].kind == 'S')
-        g_home_sel++;
     return 0;
+}
+
+/* 現在選択されているカード。無ければ NULL */
+static ApiItem *selected_card(void)
+{
+    if (g_section_sel < 0 || g_section_sel >= g_section_count)
+        return NULL;
+    Section *s = &g_sections[g_section_sel];
+    if (s->count <= 0)
+        return NULL;
+    int idx = s->first + s->cursor;
+    if (idx < 0 || idx >= g_home_count)
+        return NULL;
+    return &g_home_items[idx];
 }
 
 static Screen screen_connect_tick(void)
@@ -539,45 +658,30 @@ static Screen screen_login_tick(void)
 
 static Screen screen_home_tick(void)
 {
+    Section *sec = (g_section_sel < g_section_count) ? &g_sections[g_section_sel] : NULL;
+
+    /* 左右でカード移動、上下でセクション移動 (PC 版の横スクロールと同じ操作) */
+    if (sec && (g_pressed & PSP_CTRL_LEFT) && sec->cursor > 0)
+        sec->cursor--;
+    if (sec && (g_pressed & PSP_CTRL_RIGHT) && sec->cursor < sec->count - 1)
+        sec->cursor++;
     if (g_pressed & PSP_CTRL_UP) {
-        int i = g_home_sel - 1;
-        while (i >= 0 && g_home_items[i].kind == 'S') i--;
-        if (i >= 0) g_home_sel = i;
+        int i = g_section_sel - 1;
+        while (i >= 0 && g_sections[i].count == 0) i--;
+        if (i >= 0) g_section_sel = i;
     }
     if (g_pressed & PSP_CTRL_DOWN) {
-        int i = g_home_sel + 1;
-        while (i < g_home_count && g_home_items[i].kind == 'S') i++;
-        if (i < g_home_count) g_home_sel = i;
+        int i = g_section_sel + 1;
+        while (i < g_section_count && g_sections[i].count == 0) i++;
+        if (i < g_section_count) g_section_sel = i;
     }
-    scroll_to(g_home_sel, &g_home_scroll);
+    /* 選択中セクションが画面に入るようにする (同時に 2 段まで表示) */
+    if (g_section_sel < g_section_top)
+        g_section_top = g_section_sel;
+    if (g_section_sel > g_section_top + 1)
+        g_section_top = g_section_sel - 1;
 
-    if ((g_pressed & PSP_CTRL_CIRCLE) && g_home_count > 0) {
-        ApiItem *it = &g_home_items[g_home_sel];
-        if (it->kind == 'P') {
-            g_track_count = api_playlist(it->id, g_pl_title, sizeof(g_pl_title),
-                                         g_tracks, API_MAX_TRACKS);
-            if (g_track_count >= 0) {
-                g_track_sel = 0;
-                g_track_scroll = 0;
-                g_playing_index = -1;
-                return SCR_PLAYLIST;
-            }
-        } else if (it->kind == 'V') {
-            /* 単曲: 1曲だけの擬似プレイリストにする */
-            snprintf(g_pl_title, sizeof(g_pl_title), "%s", it->title);
-            snprintf(g_tracks[0].video_id, sizeof(g_tracks[0].video_id), "%s", it->id);
-            snprintf(g_tracks[0].title, sizeof(g_tracks[0].title), "%s", it->title);
-            snprintf(g_tracks[0].artist, sizeof(g_tracks[0].artist), "%s", it->subtitle);
-            g_tracks[0].duration_sec = 0;
-            g_track_count = 1;
-            g_track_sel = 0;
-            g_playing_index = 0;
-            player_start(g_tracks[0].video_id);
-            return SCR_PLAYER;
-        }
-    }
-
-    /* SELECT: ログイン / ログアウトの切り替え */
+    /* SELECT: ログイン / ログアウト */
     if (g_pressed & PSP_CTRL_SELECT) {
         if (g_auth) {
             player_stop();
@@ -595,41 +699,89 @@ static Screen screen_home_tick(void)
         }
     }
 
-    /* ログイン不可 (サーバーに OAuth クライアント未設定) なら案内を出さない */
-    const char *hint = g_auth      ? "○: 開く    SELECT: ログアウト    START: 終了"
-                     : g_can_login ? "○: 開く    SELECT: ログイン    START: 終了"
-                                   : "○: 開く    START: 終了";
+    ApiItem *cur = selected_card();
+    if ((g_pressed & PSP_CTRL_CIRCLE) && cur) {
+        if (cur->kind == 'P') {
+            g_track_count = api_playlist(cur->id, g_pl_title, sizeof(g_pl_title),
+                                         g_tracks, API_MAX_TRACKS);
+            if (g_track_count >= 0) {
+                g_track_sel = 0;
+                g_track_scroll = 0;
+                g_playing_index = -1;
+                return SCR_PLAYLIST;
+            }
+        } else if (cur->kind == 'V') {
+            /* 単曲: 1 曲だけのプレイリストとして扱う */
+            snprintf(g_pl_title, sizeof(g_pl_title), "%s", cur->title);
+            snprintf(g_tracks[0].video_id, sizeof(g_tracks[0].video_id), "%s", cur->id);
+            snprintf(g_tracks[0].title, sizeof(g_tracks[0].title), "%s", cur->title);
+            snprintf(g_tracks[0].artist, sizeof(g_tracks[0].artist), "%s", cur->subtitle);
+            g_tracks[0].duration_sec = 0;
+            g_track_count = 1;
+            g_track_sel = 0;
+            g_playing_index = 0;
+            player_start(g_tracks[0].video_id);
+            return SCR_PLAYER;
+        }
+    }
+
+    /* --- 描画 --- */
     frame_begin();
-    draw_chrome(g_auth ? "ホーム" : "ホーム (未ログイン)", hint);
+    draw_top_bar();
 
     if (g_home_count == 0) {
-        /* 空表示のまま放置せず、理由と次の操作を示す */
-        text(24, 80, C_ACCENT, 0.85f, "表示できる項目がありませんでした");
+        text(24, 90, C_ACCENT, 0.85f, "表示できる項目がありませんでした");
         if (g_error[0]) {
             intraFontSetStyle(g_font, 0.7f, C_DIM, 0, 0.0f, 0);
-            intraFontPrintColumn(g_font, 24, 108, SCR_W - 48, g_error);
+            intraFontPrintColumn(g_font, 24, 118, SCR_W - 48, g_error);
         }
-        text(24, 170, C_DIM, 0.7f, "サーバーのログを確認してください");
-        if (g_auth)
-            text(24, 192, C_DIM, 0.7f, "SELECT でログアウトすると一般向け表示に戻ります");
+        text(24, 176, C_DIM, 0.7f, "サーバーのログを確認してください");
         draw_now_playing_bar();
         frame_end();
         return SCR_HOME;
     }
 
-    int y = LIST_TOP;
-    for (int i = g_home_scroll;
-         i < g_home_count && i < g_home_scroll + LIST_ROWS; i++) {
-        ApiItem *it = &g_home_items[i];
-        if (it->kind == 'S') {
-            text(8, y + 13, C_HEADER, 0.75f, it->title);
-        } else {
-            if (i == g_home_sel)
-                draw_rect(0, y + 1, SCR_W, ROW_H - 1, C_SEL_BG);
-            text(20, y + 13, (i == g_home_sel) ? C_TEXT : C_DIM, 0.8f, it->title);
+    /* セクションを最大 2 段、横並びのカードで描く */
+    for (int row = 0; row < 2; row++) {
+        int si = g_section_top + row;
+        if (si >= g_section_count)
+            break;
+        Section *s = &g_sections[si];
+        int base_y = ROW_TOP + row * ROW_PITCH;
+        int active = (si == g_section_sel);
+
+        text(10, base_y, active ? C_TEXT : C_DIM, 0.75f, s->title);
+
+        /* 選択中カードが見えるように横スクロール量を決める */
+        int visible = (SCR_W - 20) / CARD_PITCH;
+        if (visible < 1) visible = 1;
+        int scroll = s->cursor - visible / 2;
+        if (scroll > s->count - visible) scroll = s->count - visible;
+        if (scroll < 0) scroll = 0;
+
+        for (int c = 0; c < visible && scroll + c < s->count; c++) {
+            int idx = s->first + scroll + c;
+            if (idx >= g_home_count)
+                break;
+            ApiItem *it = &g_home_items[idx];
+            int x = 10 + c * CARD_PITCH;
+            int y = base_y + 6;
+
+            if (active && (scroll + c) == s->cursor)
+                draw_rect(x - 3, y - 3, CARD_SIZE + 6, CARD_SIZE + 6, C_ACCENT);
+            art_draw(it->id, x, y, CARD_SIZE);
         }
-        y += ROW_H;
     }
+
+    /* 選択中カードの題名と副題 (PC 版のカード下のテキストに相当) */
+    if (cur) {
+        draw_rect(0, INFO_Y - 2, SCR_W, 34, 0xFF2A1A12);
+        intraFontSetStyle(g_font, 0.8f, C_TEXT, 0, 0.0f, 0);
+        intraFontPrintColumn(g_font, 10, INFO_Y + 11, SCR_W - 20, cur->title);
+        intraFontSetStyle(g_font, 0.62f, C_DIM, 0, 0.0f, 0);
+        intraFontPrintColumn(g_font, 10, INFO_Y + 26, SCR_W - 20, cur->subtitle);
+    }
+
     draw_now_playing_bar();
     frame_end();
     return SCR_HOME;
@@ -660,6 +812,8 @@ static Screen screen_playlist_tick(void)
 
     frame_begin();
     draw_chrome(g_pl_title, "上下: 選択    ○: 再生    ×: 戻る");
+    if (g_track_count > 0 && g_track_sel < g_track_count)
+        art_draw(g_tracks[g_track_sel].video_id, SCR_W - 40, 30, 34);
     int y = LIST_TOP;
     for (int i = g_track_scroll;
          i < g_track_count && i < g_track_scroll + LIST_ROWS; i++) {
@@ -767,6 +921,7 @@ int main(void)
         return 0;
     }
     player_global_init();
+    art_init();
 
     Screen scr = SCR_CONNECT;
     while (g_running) {
@@ -804,6 +959,7 @@ int main(void)
 
     login_cancel();
     player_stop();
+    art_shutdown();
     intraFontUnload(g_font);
     if (g_font_jpn)
         intraFontUnload(g_font_jpn);
