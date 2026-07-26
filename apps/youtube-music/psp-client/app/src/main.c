@@ -42,6 +42,7 @@ typedef enum {
     SCR_HOME,
     SCR_PLAYLIST,
     SCR_PLAYER,
+    SCR_LYRICS,
     SCR_OFFLINE,   /* ダウンロード済みの曲の一覧 (ネットワーク無しでも入れる) */
 } Screen;
 
@@ -164,6 +165,14 @@ static int g_radio_error_frames = 0;
 static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
 static int g_off_sel = 0, g_off_scroll = 0;   /* オフライン画面のカーソル */
+
+#define MAX_LYRIC_LINES 200
+#define LYRICS_BUF_SIZE (32 * 1024)
+static char g_lyrics_buf[LYRICS_BUF_SIZE];
+static char *g_lyrics_lines[MAX_LYRIC_LINES];
+static int g_lyrics_count = 0;
+static int g_lyrics_scroll = 0;
+static char g_lyrics_video_id[24] = "";
 
 static void start_track(int index);
 
@@ -898,6 +907,12 @@ static void start_track(int index)
 {
     if (index < 0 || index >= g_track_count)
         return;
+    if (strcmp(g_lyrics_video_id, g_tracks[index].video_id) != 0) {
+        g_lyrics_video_id[0] = '\0';
+        g_lyrics_buf[0] = '\0';
+        g_lyrics_count = 0;
+        g_lyrics_scroll = 0;
+    }
     g_playing_index = index;
     if (g_play_mode == PLAY_MODE_SHUFFLE)
         shuffle_mark_played(index);
@@ -1144,6 +1159,12 @@ static Screen screen_player_tick(void)
 {
     PlayerState st = player_state();
 
+    if ((g_pressed & PSP_CTRL_UP) &&
+        g_playing_index >= 0 && g_playing_index < g_track_count) {
+        snd_play(SND_OK);
+        g_lyrics_scroll = 0;
+        return SCR_LYRICS;
+    }
     if (g_pressed & PSP_CTRL_CROSS) {
         snd_play(SND_CANCEL);
         return SCR_PLAYLIST;
@@ -1188,7 +1209,7 @@ static Screen screen_player_tick(void)
     ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
     ui_frame_begin();
     ui_chrome("再生中",
-              "△: 一時停止    □: ラジオ    L/R: 前後の曲    SELECT: 再生モード    ×: 一覧へ",
+              "↑: 歌詞  △: 一時停止  □: ラジオ  L/R: 前後  SELECT: 再生モード  ×: 一覧",
               g_auth, g_account);
     if (t) {
         /* 左に大きなアートワーク (柔らかい影のみ、枠なし)、右に曲情報 */
@@ -1256,6 +1277,102 @@ static Screen screen_player_tick(void)
     return SCR_PLAYER;
 }
 
+/* --- 歌詞 --- */
+
+static void load_lyrics(const ApiTrack *track)
+{
+    g_lyrics_count = 0;
+    g_lyrics_scroll = 0;
+    snprintf(g_lyrics_video_id, sizeof(g_lyrics_video_id), "%s",
+             track->video_id);
+
+    if (api_lyrics(track->video_id, g_lyrics_buf,
+                   sizeof(g_lyrics_buf)) < 0) {
+        g_lyrics_buf[0] = '\0';
+        return;
+    }
+
+    char *line = g_lyrics_buf;
+    while (*line && g_lyrics_count < MAX_LYRIC_LINES) {
+        char *next = strchr(line, '\n');
+        if (next)
+            *next = '\0';
+        {
+            size_t len = strlen(line);
+            if (len > 0 && line[len - 1] == '\r')
+                line[len - 1] = '\0';
+        }
+        if (strncmp(line, "line\t", 5) == 0)
+            g_lyrics_lines[g_lyrics_count++] = line + 5;
+        if (!next)
+            break;
+        line = next + 1;
+    }
+}
+
+static Screen screen_lyrics_tick(void)
+{
+    ApiTrack *track =
+        (g_playing_index >= 0 && g_playing_index < g_track_count)
+            ? &g_tracks[g_playing_index] : NULL;
+
+    if (!track)
+        return SCR_PLAYER;
+
+    if (g_pressed & PSP_CTRL_CROSS) {
+        snd_play(SND_CANCEL);
+        return SCR_PLAYER;
+    }
+    if (g_pressed & PSP_CTRL_UP) {
+        if (g_lyrics_scroll > 0) {
+            g_lyrics_scroll--;
+            snd_play(SND_MOVE);
+        } else {
+            snd_play(SND_CANCEL);
+            return SCR_PLAYER;
+        }
+    }
+    if ((g_pressed & PSP_CTRL_DOWN) &&
+        g_lyrics_scroll + LIST_ROWS < g_lyrics_count) {
+        g_lyrics_scroll++;
+        snd_play(SND_MOVE);
+    }
+
+    ui_bg_ambient(art_avg_color(track->video_id));
+    ui_frame_begin();
+    ui_chrome("歌詞", "上下: スクロール    ↑(先頭)/×: 戻る",
+              g_auth, g_account);
+    text_bold(MARGIN, 44, C_TEXT, 0.75f, track->title);
+    gu_state_2d();
+    draw_rect(MARGIN, 52, SCR_W - MARGIN * 2, 1, C_LINE);
+
+    if (strcmp(g_lyrics_video_id, track->video_id) != 0) {
+        const char *loading = "歌詞を取得しています...";
+        float w = gfx_text_width(0.72f, loading);
+        text((SCR_W - w) / 2.0f, 142, C_DIM, 0.72f, loading);
+        gfx_frame_end();
+        load_lyrics(track);
+        return SCR_LYRICS;
+    }
+
+    if (g_lyrics_count == 0) {
+        const char *none = "歌詞はありません";
+        float w = gfx_text_width(0.78f, none);
+        text((SCR_W - w) / 2.0f, 142, C_DIM, 0.78f, none);
+    } else {
+        int y = 70;
+        for (int i = g_lyrics_scroll;
+             i < g_lyrics_count && i < g_lyrics_scroll + LIST_ROWS; i++) {
+            text_clipped(MARGIN, y, SCR_W - MARGIN * 2,
+                         C_TEXT, 0.62f, g_lyrics_lines[i]);
+            y += 18;
+        }
+    }
+
+    gfx_frame_end();
+    return SCR_LYRICS;
+}
+
 int main(void)
 {
     setup_callbacks();
@@ -1312,6 +1429,7 @@ int main(void)
         case SCR_HOME:     scr = screen_home_tick();     break;
         case SCR_PLAYLIST: scr = screen_playlist_tick(); break;
         case SCR_PLAYER:   scr = screen_player_tick();   break;
+        case SCR_LYRICS:   scr = screen_lyrics_tick();   break;
         case SCR_OFFLINE:  scr = screen_offline_tick();  break;
         }
     }

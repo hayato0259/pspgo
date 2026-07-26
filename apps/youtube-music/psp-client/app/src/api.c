@@ -205,3 +205,15 @@ int api_radio(const char *video_id, char *title_out, int title_size,
     for_each_line(g_buf, 5, pl_line, &ctx);
     return ctx.count;
 }
+
+/* --- /api/lyrics -------------------------------------------------------- */
+
+int api_lyrics(const char *video_id, char *buf, int bufsize)
+{
+    char path[160];
+    if (!video_id || !buf || bufsize <= 0)
+        return -1;
+    buf[0] = '\0';
+    snprintf(path, sizeof(path), "/api/lyrics?yt=%s", video_id);
+    return http_get(net_server_host(), net_server_port(), path, buf, bufsize);
+}
