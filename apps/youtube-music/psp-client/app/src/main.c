@@ -136,7 +136,7 @@ static int g_playing_index = -1; /* g_tracks 内の再生中インデックス *
 static int g_auth = 0;
 static int g_can_login = 0;      /* サーバーに OAuth クライアントが設定済みか */
 static char g_account[64] = "-";
-static char g_error[128] = "";
+static char g_error[192] = "";
 static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 
 static void scroll_to(int sel, int *scroll)
@@ -250,9 +250,14 @@ static void draw_splash(const char *status, int is_error)
     text_bold(x0 + lw + 10, ly + lw / 2 + 8, C_TEXT, 0.95f, "Music");
 
     if (status && status[0]) {
-        float ss = is_error ? 0.7f : 0.65f;
-        float sw = gfx_text_width(ss, status);
-        text((SCR_W - sw) / 2.0f, 168, is_error ? C_ACCENT : C_DIM, ss, status);
+        if (is_error) {
+            /* エラーは長文になり得るので折り返して表示する */
+            intraFontSetStyle(gfx_font(), 0.7f, C_ACCENT, 0, 0.0f, 0);
+            intraFontPrintColumn(gfx_font(), 56, 168, SCR_W - 112, status);
+        } else {
+            float sw = gfx_text_width(0.65f, status);
+            text((SCR_W - sw) / 2.0f, 168, C_DIM, 0.65f, status);
+        }
     }
     if (!is_error) {
         /* 進行中を示す点滅ドット */
@@ -278,7 +283,14 @@ static Screen screen_connect_tick(void)
     }
 
     draw_splash("サーバーに接続しています", 0);
-    text(SCR_W / 2.0f - 70, 230, C_DIM, 0.55f, "接続先: " SERVER_HOST);
+    {
+        char dst[96];
+        snprintf(dst, sizeof(dst), "接続先: %s:%d%s",
+                 net_server_host(), net_server_port(),
+                 net_server_config_loaded() ? " (server.txt)" : "");
+        text((SCR_W - gfx_text_width(0.55f, dst)) / 2.0f, 230,
+             C_DIM, 0.55f, dst);
+    }
     gfx_frame_end();
 
     if (step == 0) {
@@ -294,8 +306,13 @@ static Screen screen_connect_tick(void)
     }
     rc = api_status(g_account, sizeof(g_account), &g_can_login);
     if (rc < 0) {
-        snprintf(g_error, sizeof(g_error),
-                 "サーバーに接続できません (%d)。起動していますか?", rc);
+        if (net_server_config_loaded())
+            snprintf(g_error, sizeof(g_error),
+                     "サーバーに接続できません (%d)。起動していますか?", rc);
+        else
+            snprintf(g_error, sizeof(g_error),
+                     "接続失敗 (%d)。EBOOT と同じ場所に server.txt を作り、"
+                     "サーバー機の IP:8080 を書いてください", rc);
         step = 99;
         return SCR_CONNECT;
     }
@@ -862,6 +879,7 @@ int main(void)
     sceCtrlSetSamplingCycle(0);
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
 
+    net_load_server_config();   /* server.txt があれば接続先を差し替える */
     if (gfx_init() < 0) {
         sceKernelExitGame();
         return 0;

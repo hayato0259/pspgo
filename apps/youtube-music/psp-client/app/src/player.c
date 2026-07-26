@@ -107,7 +107,7 @@ static int decode_thread(SceSize args, void *argp)
     char path[96];
     snprintf(path, sizeof(path), "/stream?yt=%s", g_video_id);
 
-    int sock = http_open_stream(SERVER_HOST, SERVER_PORT, path);
+    int sock = http_open_stream(net_server_host(), net_server_port(), path);
     if (sock < 0) {
         g_last_error = sock;
         g_state = PLAYER_ERROR;

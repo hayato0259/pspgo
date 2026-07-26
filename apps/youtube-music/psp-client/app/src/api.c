@@ -89,7 +89,7 @@ static int status_line(char **f, int nf, void *vctx)
 
 int api_status(char *name_out, int name_size, int *can_login_out)
 {
-    int len = http_get(SERVER_HOST, SERVER_PORT, "/api/status", g_buf, sizeof(g_buf));
+    int len = http_get(net_server_host(), net_server_port(), "/api/status", g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
     struct status_ctx ctx = { 0, 0, name_out, name_size };
@@ -102,7 +102,7 @@ int api_status(char *name_out, int name_size, int *can_login_out)
 
 int api_logout(void)
 {
-    int len = http_get(SERVER_HOST, SERVER_PORT, "/api/logout", g_buf, sizeof(g_buf));
+    int len = http_get(net_server_host(), net_server_port(), "/api/logout", g_buf, sizeof(g_buf));
     return (len < 0) ? len : 0;
 }
 
@@ -140,7 +140,7 @@ static int home_line(char **f, int nf, void *vctx)
 
 int api_home(ApiItem *items, int max)
 {
-    int len = http_get(SERVER_HOST, SERVER_PORT, "/api/home", g_buf, sizeof(g_buf));
+    int len = http_get(net_server_host(), net_server_port(), "/api/home", g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
     if (has_server_error())
@@ -177,7 +177,7 @@ int api_playlist(const char *id, char *title_out, int title_size,
 {
     char path[160];
     snprintf(path, sizeof(path), "/api/playlist?id=%s", id);
-    int len = http_get(SERVER_HOST, SERVER_PORT, path, g_buf, sizeof(g_buf));
+    int len = http_get(net_server_host(), net_server_port(), path, g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
     if (has_server_error())

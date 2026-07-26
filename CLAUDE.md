@@ -64,6 +64,16 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
 - 配信フォーマットは MP3 CBR 128kbps / 44.1kHz / stereo に固定（Opus は PSP で不可）
 - Media Engine は排他リソース。ME を使う他プラグインとは共存できない
 
+## 配布の方針
+
+- **サーバーは各利用者がセルフホストする。** クラウド (Firebase 等) へのデプロイは不可:
+  PSP は現代の TLS を話せず、HTTPS 必須のマネージドホスティングには接続できない。
+  加えて不特定多数向けの YouTube 配信プロキシは規約・アカウント停止リスクが大きい
+- PSP クライアントの接続先は **EBOOT と同じフォルダの `server.txt`** で実行時に決まる
+  (無ければ 127.0.0.1 = PPSSPP 開発用)。ビルド済み EBOOT の配布はこれで成立する
+- タグ `v*` を push すると GitHub Actions (pspdev/pspdev コンテナ) が
+  EBOOT.PBP をビルドして Release に添付する
+
 ## 公開前のチェック（GitHub 公開予定のため）
 
 - 認証情報・LAN の IP アドレス・SSID をコードやドキュメントにハードコードしたまま

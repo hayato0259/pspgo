@@ -1,0 +1,5 @@
+# pip install -r requirements.txt
+# 別途、コマンドとして ffmpeg と yt-dlp が必要 (macOS: brew install ffmpeg yt-dlp)
+ytmusicapi>=1.7
+qrcode>=7
+Pillow>=10

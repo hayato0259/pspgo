@@ -1,6 +1,18 @@
 #ifndef NET_H
 #define NET_H
 
+/*
+ * 接続先サーバーの実行時解決。
+ * EBOOT と同じフォルダの server.txt (例: "192.168.0.5:8080") を読み、
+ * 無ければコンパイル時既定 (SERVER_HOST / SERVER_PORT) を使う。
+ * ビルド済み EBOOT を配布しても、利用者が server.txt を書くだけで使える。
+ */
+void net_load_server_config(void);
+const char *net_server_host(void);
+int net_server_port(void);
+/* server.txt を読めた場合 1 (接続失敗時の案内文の出し分け用) */
+int net_server_config_loaded(void);
+
 /* Wi-Fi (apctl) 接続。0=成功 */
 int net_init(void);
 

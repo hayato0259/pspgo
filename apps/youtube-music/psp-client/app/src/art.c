@@ -105,7 +105,7 @@ static int art_thread(SceSize args, void *argp)
 
         char path[128];
         snprintf(path, sizeof(path), "/art?id=%s&s=%d", id, ART_SIDE);
-        int got = http_get_bin(SERVER_HOST, SERVER_PORT, path,
+        int got = http_get_bin(net_server_host(), net_server_port(), path,
                               g_rx, sizeof(g_rx));
 
         lock();

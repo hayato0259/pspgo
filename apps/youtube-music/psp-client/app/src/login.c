@@ -58,7 +58,7 @@ static int login_thread(SceSize args, void *argp)
 
     /* 1. デバイスコードを取得 */
     g_state = LOGIN_REQUESTING;
-    int len = http_get(SERVER_HOST, SERVER_PORT, "/api/login/start",
+    int len = http_get(net_server_host(), net_server_port(), "/api/login/start",
                        g_buf, sizeof(g_buf));
     if (len < 0) {
         set_failed("サーバーに接続できません");
@@ -99,7 +99,7 @@ static int login_thread(SceSize args, void *argp)
         if (g_cancel)
             break;
 
-        len = http_get(SERVER_HOST, SERVER_PORT, "/api/login/poll",
+        len = http_get(net_server_host(), net_server_port(), "/api/login/poll",
                        g_buf, sizeof(g_buf));
         if (len < 0)
             continue; /* 一時的な通信失敗は待って再試行 */

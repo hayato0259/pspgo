@@ -1,0 +1,33 @@
+# タグ (v*) を push すると youtube-music の EBOOT.PBP をビルドして Release に添付する。
+# 手動実行 (workflow_dispatch) ではアーティファクトとしてダウンロードできる。
+name: build-eboot
+
+on:
+  push:
+    tags: ["v*"]
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    container: pspdev/pspdev:latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Build youtube-music EBOOT
+        run: |
+          export PSPDEV=/usr/local/pspdev
+          export PATH="$PSPDEV/bin:$PATH"
+          cd apps/youtube-music/psp-client/app
+          make
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: youtube-music-EBOOT
+          path: apps/youtube-music/psp-client/app/EBOOT.PBP
+
+      - name: Attach to release
+        if: startsWith(github.ref, 'refs/tags/')
+        uses: softprops/action-gh-release@v2
+        with:
+          files: apps/youtube-music/psp-client/app/EBOOT.PBP

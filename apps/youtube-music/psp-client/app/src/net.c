@@ -10,7 +10,54 @@
 #include <pspnet_apctl.h>
 #include <string.h>
 #include <stdio.h>
+#include <stdlib.h>
 #include "net.h"
+#include "common.h"
+
+/* --- 接続先サーバーの実行時解決 ------------------------------------------
+ * EBOOT と同じフォルダの server.txt を読む。書式は 1 行目に
+ *   192.168.0.5:8080   (ポート省略時は 8080)
+ * ※ この層は DNS を引かないため、ホスト名ではなく IPv4 アドレスを書くこと。
+ * ファイルが無ければコンパイル時既定 (開発時は 127.0.0.1 = PPSSPP) を使う。
+ */
+static char g_srv_host[64] = SERVER_HOST;
+static int g_srv_port = SERVER_PORT;
+static int g_srv_loaded = 0;
+
+void net_load_server_config(void)
+{
+    FILE *fp = fopen("server.txt", "r");
+    if (!fp)
+        return;
+    char line[128] = "";
+    if (fgets(line, sizeof(line), fp)) {
+        /* 前後の空白・改行を落とす */
+        char *p = line;
+        while (*p == ' ' || *p == '\t')
+            p++;
+        char *e = p + strlen(p);
+        while (e > p && (e[-1] == '\n' || e[-1] == '\r' ||
+                         e[-1] == ' ' || e[-1] == '\t'))
+            *--e = '\0';
+
+        char *colon = strchr(p, ':');
+        if (colon) {
+            *colon = '\0';
+            int port = atoi(colon + 1);
+            if (port > 0 && port < 65536)
+                g_srv_port = port;
+        }
+        if (p[0]) {
+            snprintf(g_srv_host, sizeof(g_srv_host), "%s", p);
+            g_srv_loaded = 1;
+        }
+    }
+    fclose(fp);
+}
+
+const char *net_server_host(void) { return g_srv_host; }
+int net_server_port(void) { return g_srv_port; }
+int net_server_config_loaded(void) { return g_srv_loaded; }
 
 struct in_addr_psp { unsigned int s_addr; };
 struct sockaddr_in_psp {

@@ -126,15 +126,32 @@ cd server
 - **サーバー側**: ytmusicapi（メタデータ）/ yt-dlp（音声取得）/ ffmpeg（MP3 変換）/
   qrcode（ログイン用 QR。未インストールでもコード入力で動く）
 
-## サーバーの起動
+## クイックスタート（ビルド済み EBOOT を使う）
 
-```bash
-cd server
-python3 -m venv .venv && ./.venv/bin/pip install ytmusicapi qrcode
-./.venv/bin/python app.py 8080
-```
+ツールチェーンは不要。必要なのは「PC でサーバーを動かす」「PSP に EBOOT を置く」の 2 つ。
 
-ffmpeg と yt-dlp が PATH にあること（`brew install ffmpeg yt-dlp`）。
+1. **サーバー** (PC。PSP と同じ Wi-Fi に接続していること):
+
+   ```bash
+   cd server
+   python3 -m venv .venv && ./.venv/bin/pip install -r requirements.txt
+   ./.venv/bin/python app.py 8080
+   ```
+
+   ffmpeg と yt-dlp が PATH にあること（macOS: `brew install ffmpeg yt-dlp`）。
+
+2. **PSP**: GitHub Releases の `EBOOT.PBP` を **`ef0:/PSP/GAME/YTMUSIC/`**
+   （PSP Go の内蔵ストレージ）に置き、同じフォルダに `server.txt` を作って
+   サーバー PC の IPv4 アドレスを 1 行書く:
+
+   ```
+   192.168.0.5:8080
+   ```
+
+   ポート省略時は 8080。ホスト名は不可（IP アドレスのみ）。
+   `server.txt` が無い場合は 127.0.0.1（PPSSPP 開発用）に接続する。
+
+## サーバーの起動（詳細）
 
 ### マイミックスを表示したい場合はブラウザ認証を使う
 
@@ -167,17 +184,20 @@ cd server
 **テスト用の偽 client_id を `auth/` に書き込むので、終わったら
 `rm -f auth/oauth_client.json auth/oauth.json` で消すこと。**
 
-## PSP アプリのビルド
+## PSP アプリのビルド（開発者向け）
 
 ```bash
 export PSPDEV="$HOME/pspdev-install/pspdev"
 export PATH="$PSPDEV/bin:$PATH"
 cd psp-client/app
-make SERVER_HOST=192.168.x.x     # サーバーを動かしている PC の LAN IP
+make
 ```
 
-`EBOOT.PBP` ができるので、実機では **`ef0:/PSP/GAME/ytmusic/`**（PSP Go の内蔵ストレージ）
+接続先は実行時に `server.txt` で決まるため、通常は `SERVER_HOST` の指定は不要
+（`make SERVER_HOST=192.168.x.x` で既定値の焼き込みも一応できる）。
+`EBOOT.PBP` ができるので、実機では **`ef0:/PSP/GAME/YTMUSIC/`**（PSP Go の内蔵ストレージ)
 に置く。実機セットアップは [../../docs/psp-go-setup.md](../../docs/psp-go-setup.md) を参照。
+タグ (`v*`) を push すると GitHub Actions が EBOOT.PBP をビルドして Release に添付する。
 
 ### PPSSPP で動かす
 
