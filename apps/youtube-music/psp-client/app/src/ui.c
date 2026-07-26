@@ -1,0 +1,113 @@
+/*
+ * アプリ共通の UI 部品 (背景・トップバー・再生バー)。
+ * 見た目は PC 版 YouTube Music を 480x272 に落とし込んだもの。
+ */
+#include <pspgu.h>
+#include <stdio.h>
+#include "ui.h"
+#include "gfx.h"
+#include "theme.h"
+#include "art.h"
+#include "common.h"
+
+/* --- 背景 ----------------------------------------------------------------
+ * ほぼ黒 + 最上部だけうっすら明るい (本家と同じ構造)。
+ * 明るい部分の色は「選択中アートワークの平均色」へ毎フレーム補間し、
+ * 本家のヒーローグラデーション (コンテンツ色で染まる背景) を再現する。
+ * その上に XMB 風のゆっくり流れる光をごく薄く重ねる。
+ */
+static float g_amb[3] = { 0x20, 0x24, 0x2A };   /* R,G,B の現在値 */
+static unsigned int g_amb_target = 0;
+
+void ui_bg_ambient(unsigned int abgr) { g_amb_target = abgr; }
+
+static unsigned int ambient_top_color(void)
+{
+    /* 目標色: 既定はニュートラルな暗青。指定があればその色を暗く落とした値 */
+    float tr = 0x20, tg = 0x24, tb = 0x2A;
+    if (g_amb_target) {
+        tr = 10.0f + (float)((g_amb_target)       & 0xFF) * 0.24f;
+        tg = 10.0f + (float)((g_amb_target >> 8)  & 0xFF) * 0.24f;
+        tb = 10.0f + (float)((g_amb_target >> 16) & 0xFF) * 0.24f;
+    }
+    g_amb[0] += (tr - g_amb[0]) * 0.05f;
+    g_amb[1] += (tg - g_amb[1]) * 0.05f;
+    g_amb[2] += (tb - g_amb[2]) * 0.05f;
+    return 0xFF000000 |
+           ((unsigned)g_amb[2] << 16) | ((unsigned)g_amb[1] << 8) |
+           (unsigned)g_amb[0];
+}
+
+void ui_frame_begin(void)
+{
+    gfx_frame_begin();
+    draw_vgrad(0, 0, SCR_W, 110, ambient_top_color(), C_BG);
+    int t = (int)(gfx_frame / 2) % (SCR_W + 240);
+    int x = t - 240;
+    draw_hgrad(x, 0, 120, SCR_H, 0x00FFFFFF, 0x08FFFFFF);
+    draw_hgrad(x + 120, 0, 120, SCR_H, 0x08FFFFFF, 0x00FFFFFF);
+}
+
+/* --- トップバー ---------------------------------------------------------- */
+
+void ui_top_bar(int auth, const char *account)
+{
+    /* PC 版と同じく帯を敷かず、黒地に直接ロゴ + Music ロゴタイプ */
+    gfx_logo(MARGIN, 4, 20);
+    text_bold(MARGIN + 26, 19, C_TEXT, 0.82f, "Music");
+    if (auth && account[0] && account[0] != '-') {
+        float w = intraFontMeasureText(gfx_font(), account);
+        text(SCR_W - MARGIN - w * 0.6f, 19, C_DIM, 0.6f, account);
+    }
+}
+
+void ui_chrome(const char *title, const char *hint,
+               int auth, const char *account)
+{
+    gfx_logo(8, 4, 16);
+    text_bold(30, 17, C_TEXT, 0.85f, title);
+    if (auth)
+        text(SCR_W - 8 - intraFontMeasureText(gfx_font(), account) * 0.7f, 17,
+             C_DIM, 0.7f, account);
+    draw_rect(0, 24, SCR_W, 1, C_LINE);
+    draw_rect(0, SCR_H - 18, SCR_W, 18, 0xFF0A0A0A);
+    draw_rect(0, SCR_H - 18, SCR_W, 1, C_LINE);
+    text(8, SCR_H - 5, C_DIM, 0.65f, hint);
+}
+
+/* --- 再生バー ------------------------------------------------------------ */
+
+void ui_now_playing(const char *art_id, const char *title, const char *artist,
+                    PlayerState st, int elapsed_sec, int duration_sec)
+{
+    int top = SCR_H - BAR_H;
+
+    draw_vgrad(0, top, SCR_W, BAR_H, 0xF8202020, 0xF80D0D0D);
+
+    /* 進捗は本家と同じくバーの上端に赤で載せる */
+    draw_rect(0, top, SCR_W, 1, C_LINE);
+    if (duration_sec > 0) {
+        int w = SCR_W * elapsed_sec / duration_sec;
+        if (w > SCR_W) w = SCR_W;
+        draw_rect(0, top - 1, w, 2, C_ACCENT);
+    }
+
+    art_draw(art_id, 4, top + 4, 24);
+
+    const char *mark = (st == PLAYER_PAUSED)    ? "II" :
+                       (st == PLAYER_BUFFERING) ? "..." :
+                       (st == PLAYER_ERROR)     ? "!"  : ">";
+    text(36, top + 15, C_ACCENT, 0.7f, mark);
+
+    text_clipped(52, top + 14, 250, C_TEXT, 0.66f, title);
+    text_clipped(52, top + 27, 250, C_DIM, 0.56f, artist);
+
+    char tm[32];
+    if (duration_sec > 0)
+        snprintf(tm, sizeof(tm), "%d:%02d / %d:%02d",
+                 elapsed_sec / 60, elapsed_sec % 60,
+                 duration_sec / 60, duration_sec % 60);
+    else
+        snprintf(tm, sizeof(tm), "%d:%02d", elapsed_sec / 60, elapsed_sec % 60);
+    text(SCR_W - 82, top + 20, C_DIM, 0.6f, tm);
+}

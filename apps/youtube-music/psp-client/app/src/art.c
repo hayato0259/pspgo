@@ -14,6 +14,8 @@
 #include <stdio.h>
 #include "art.h"
 #include "net.h"
+#include "gfx.h"
+#include "theme.h"
 #include "common.h"
 
 #define SLOTS 20          /* 同時に保持する枚数 (2段分 + 再生中) */
@@ -25,6 +27,7 @@ typedef struct {
     char id[48];
     int state;
     unsigned int use;                         /* LRU 用の使用時刻 */
+    unsigned int avg;                         /* 平均色 (ABGR)。環境光用 */
     unsigned int pixels[ART_SIDE * ART_SIDE] __attribute__((aligned(16)));
 } Slot;
 
@@ -112,6 +115,20 @@ static int art_thread(SceSize args, void *argp)
                 memcpy(s->pixels, g_rx, (size_t)got);
                 /* GPU は CPU キャッシュを見ないので明示的に書き戻す */
                 sceKernelDcacheWritebackRange(s->pixels, sizeof(s->pixels));
+
+                /* 環境光用の平均色 (角のアルファ 0 画素も含むが誤差の範囲) */
+                unsigned long long r = 0, g = 0, b = 0;
+                for (int i = 0; i < ART_SIDE * ART_SIDE; i++) {
+                    unsigned int p = s->pixels[i];
+                    r += p & 0xFF;
+                    g += (p >> 8) & 0xFF;
+                    b += (p >> 16) & 0xFF;
+                }
+                int n = ART_SIDE * ART_SIDE;
+                s->avg = 0xFF000000 |
+                         ((unsigned)(b / n) << 16) |
+                         ((unsigned)(g / n) << 8) |
+                         (unsigned)(r / n);
                 s->state = SLOT_READY;
             } else {
                 s->state = SLOT_MISSING;   /* 取得できない画像は再試行しない */
@@ -152,59 +169,12 @@ void art_shutdown(void)
 
 /* --- 描画 --------------------------------------------------------------- */
 
-typedef struct { short u, v; short x, y, z; } TexVtx;
-typedef struct { unsigned int color; short x, y, z; } FlatVtx;
-
-/* intraFont が残す深度/アルファテストを解除する (main.c と同じ理由) */
-static void gu_state_2d(void)
-{
-    sceGuDisable(GU_DEPTH_TEST);
-    sceGuDisable(GU_ALPHA_TEST);
-    sceGuDisable(GU_STENCIL_TEST);
-    sceGuDisable(GU_CULL_FACE);
-}
-
-static void fill(int x, int y, int w, int h, unsigned int color)
-{
-    FlatVtx *v = sceGuGetMemory(2 * sizeof(FlatVtx));
-    v[0].color = color; v[0].x = x;     v[0].y = y;     v[0].z = 0;
-    v[1].color = color; v[1].x = x + w; v[1].y = y + h; v[1].z = 0;
-    gu_state_2d();
-    sceGuDisable(GU_TEXTURE_2D);
-    sceGuDrawArray(GU_SPRITES,
-                   GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, v);
-    sceGuEnable(GU_TEXTURE_2D);
-}
-
-static void blit(const unsigned int *pixels, int x, int y, int size)
-{
-    gu_state_2d();
-    sceGuEnable(GU_TEXTURE_2D);
-    sceGuTexMode(GU_PSM_8888, 0, 0, 0);          /* スウィズルなし */
-    sceGuTexImage(0, ART_SIDE, ART_SIDE, ART_SIDE, pixels);
-    /*
-     * GU_TCC_RGB だとアルファが直前のマテリアル色に依存し、
-     * 0 のままだと完全に透明になって何も見えない。
-     * サーバーは A=255 の RGBA を送るので RGBA を使い、
-     * 併せて頂点色も不透明の白に固定する。
-     */
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
-    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
-    sceGuColor(0xFFFFFFFF);
-
-    TexVtx *v = sceGuGetMemory(2 * sizeof(TexVtx));
-    v[0].u = 0;         v[0].v = 0;         v[0].x = x;        v[0].y = y;        v[0].z = 0;
-    v[1].u = ART_SIDE;  v[1].v = ART_SIDE;  v[1].x = x + size; v[1].y = y + size; v[1].z = 0;
-    sceGuDrawArray(GU_SPRITES,
-                   GU_TEXTURE_16BIT | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, v);
-}
-
 void art_draw(const char *id, int x, int y, int size)
 {
     g_clock++;
 
     if (!id || !id[0]) {
-        fill(x, y, size, size, 0xFF3A2A22);
+        gfx_card_fill(x, y, size, C_CARD_MISS);
         return;
     }
 
@@ -215,7 +185,7 @@ void art_draw(const char *id, int x, int y, int size)
         if (s)
             enqueue(id);
         unlock();
-        fill(x, y, size, size, 0xFF3A2A22);   /* 読み込み中のプレースホルダ */
+        gfx_card_fill(x, y, size, C_CARD_LOAD);   /* 読み込み中のプレースホルダ */
         return;
     }
     s->use = g_clock;
@@ -224,7 +194,19 @@ void art_draw(const char *id, int x, int y, int size)
     unlock();
 
     if (state == SLOT_READY)
-        blit(px, x, y, size);
+        gfx_blit_raw(px, ART_SIDE, x, y, size, size);
     else
-        fill(x, y, size, size, state == SLOT_MISSING ? 0xFF2E2018 : 0xFF3A2A22);
+        gfx_card_fill(x, y, size,
+                      state == SLOT_MISSING ? C_CARD_MISS : C_CARD_LOAD);
+}
+
+unsigned int art_avg_color(const char *id)
+{
+    if (!id || !id[0])
+        return 0;
+    lock();
+    Slot *s = find_slot(id);
+    unsigned int avg = (s && s->state == SLOT_READY) ? s->avg : 0;
+    unlock();
+    return avg;
 }

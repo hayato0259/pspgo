@@ -14,4 +14,10 @@ void art_shutdown(void);
  */
 void art_draw(const char *id, int x, int y, int size);
 
+/*
+ * 読み込み済みアートワークの平均色 (ABGR)。背景の環境光に使う。
+ * まだ読み込めていない場合は 0 を返す。
+ */
+unsigned int art_avg_color(const char *id);
+
 #endif
