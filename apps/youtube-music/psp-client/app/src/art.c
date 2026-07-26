@@ -16,8 +16,8 @@
 #include "net.h"
 #include "common.h"
 
-#define SLOTS 16          /* 同時に保持する枚数 */
-#define QUEUE 8           /* 読み込み待ち行列 */
+#define SLOTS 20          /* 同時に保持する枚数 (2段分 + 再生中) */
+#define QUEUE 24          /* 読み込み待ち行列 (画面内のカード数より多く) */
 
 enum { SLOT_EMPTY = 0, SLOT_LOADING, SLOT_READY, SLOT_MISSING };
 
@@ -110,6 +110,8 @@ static int art_thread(SceSize args, void *argp)
         if (s) {
             if (got == ART_SIDE * ART_SIDE * 4) {
                 memcpy(s->pixels, g_rx, (size_t)got);
+                /* GPU は CPU キャッシュを見ないので明示的に書き戻す */
+                sceKernelDcacheWritebackRange(s->pixels, sizeof(s->pixels));
                 s->state = SLOT_READY;
             } else {
                 s->state = SLOT_MISSING;   /* 取得できない画像は再試行しない */
@@ -153,11 +155,21 @@ void art_shutdown(void)
 typedef struct { short u, v; short x, y, z; } TexVtx;
 typedef struct { unsigned int color; short x, y, z; } FlatVtx;
 
+/* intraFont が残す深度/アルファテストを解除する (main.c と同じ理由) */
+static void gu_state_2d(void)
+{
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_STENCIL_TEST);
+    sceGuDisable(GU_CULL_FACE);
+}
+
 static void fill(int x, int y, int w, int h, unsigned int color)
 {
     FlatVtx *v = sceGuGetMemory(2 * sizeof(FlatVtx));
     v[0].color = color; v[0].x = x;     v[0].y = y;     v[0].z = 0;
     v[1].color = color; v[1].x = x + w; v[1].y = y + h; v[1].z = 0;
+    gu_state_2d();
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDrawArray(GU_SPRITES,
                    GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, v);
@@ -166,11 +178,19 @@ static void fill(int x, int y, int w, int h, unsigned int color)
 
 static void blit(const unsigned int *pixels, int x, int y, int size)
 {
+    gu_state_2d();
     sceGuEnable(GU_TEXTURE_2D);
     sceGuTexMode(GU_PSM_8888, 0, 0, 0);          /* スウィズルなし */
     sceGuTexImage(0, ART_SIDE, ART_SIDE, ART_SIDE, pixels);
-    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGB);
+    /*
+     * GU_TCC_RGB だとアルファが直前のマテリアル色に依存し、
+     * 0 のままだと完全に透明になって何も見えない。
+     * サーバーは A=255 の RGBA を送るので RGBA を使い、
+     * 併せて頂点色も不透明の白に固定する。
+     */
+    sceGuTexFunc(GU_TFX_REPLACE, GU_TCC_RGBA);
     sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuColor(0xFFFFFFFF);
 
     TexVtx *v = sceGuGetMemory(2 * sizeof(TexVtx));
     v[0].u = 0;         v[0].v = 0;         v[0].x = x;        v[0].y = y;        v[0].z = 0;

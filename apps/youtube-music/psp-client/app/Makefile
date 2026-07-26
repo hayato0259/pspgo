@@ -12,6 +12,9 @@ ifdef AUTODEMO
 CFLAGS += -DAUTODEMO
 endif
 # 開発時の目視確認用: 画面ごとにフレームバッファを raw で書き出す
+ifdef UIDEBUG
+CFLAGS += -DUIDEBUG
+endif
 ifdef SHOTDUMP
 CFLAGS += -DSHOTDUMP
 endif

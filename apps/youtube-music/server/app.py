@@ -299,11 +299,21 @@ def logout() -> str:
     return "state\tok\n"
 
 
-def clean(s) -> str:
-    """TSV を壊す文字を除去する。"""
+def clean(s, limit: int = 88) -> str:
+    """TSV を壊す文字を除去し、UTF-8 の文字境界で切り詰める。
+
+    PSP 側のバッファは固定長で、途中で切れた UTF-8 を渡すと
+    フォント描画側が終端を読み飛ばして隣の領域まで描いてしまう。
+    そのため文字数ではなくバイト数で、必ず文字の境界で切る。
+    """
     if s is None:
         return ""
-    return str(s).replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
+    t = str(s).replace("\t", " ").replace("\r", " ").replace("\n", " ").strip()
+    raw = t.encode("utf-8")
+    if len(raw) <= limit:
+        return t
+    # limit バイトに収めたうえで、壊れた末尾のバイトを捨てる
+    return raw[:limit].decode("utf-8", "ignore").rstrip() + "…"
 
 
 def artists_of(item) -> str:

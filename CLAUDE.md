@@ -43,6 +43,13 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
   連続する日本語文字が 1 文字目以降描画されない（実測で確認）。
   jpn0.pgf は ASCII も含むので、これ 1 本で日英とも描ける
   （検証ツール: `apps/youtube-music/psp-client/fontcheck/`）
+- **intraFont は深度/アルファテストを有効にしたまま戻さない。**
+  文字の後に平面塗りやテクスチャを描くと、テストに弾かれて何も出ない。
+  描画直前に `sceGuDisable(GU_DEPTH_TEST/GU_ALPHA_TEST/GU_STENCIL_TEST/GU_CULL_FACE)`
+  を呼ぶこと（`gu_state_2d()`）。テクスチャは `GU_TCC_RGBA` +
+  `sceGuColor(0xFFFFFFFF)`、CPU で書いた画素は `sceKernelDcacheWritebackRange` が必要
+- **画面の目視確認は PPSSPP のウィンドウを画面キャプチャすれば可能。**
+  フレームバッファの読み出しはできないが、デスクトップのキャプチャで確認できる
 - **PPSSPP ではフレームバッファを CPU から読めない。**
   `sceDisplayGetFrameBuf` の返り値を読んでも古いフレームのままで、
   メインメモリへのオフスクリーン描画も反映されない（ハード/ソフト両レンダラで確認）。

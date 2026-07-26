@@ -147,9 +147,26 @@ static int font_init(void)
     return 0;
 }
 
+/*
+ * 2D の平面塗り (draw_rect) に必要な描画状態を設定する。
+ *
+ * intraFont は文字を描くときに深度テストやアルファテストを有効化し、
+ * 元に戻さない。そのため文字の後に塗りを描くと、テストで弾かれて
+ * 何も出なくなる (jpn0.pgf を主フォントにしてから発生していた)。
+ * 塗る直前に毎回状態を明示するのが確実。
+ */
+static void gu_state_2d(void)
+{
+    sceGuDisable(GU_DEPTH_TEST);
+    sceGuDisable(GU_ALPHA_TEST);
+    sceGuDisable(GU_STENCIL_TEST);
+    sceGuDisable(GU_CULL_FACE);
+}
+
 static void frame_begin(void)
 {
     sceGuStart(GU_DIRECT, g_gu_list);
+    gu_state_2d();
     sceGuClearColor(C_BG);
     sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
@@ -201,6 +218,7 @@ static void draw_rect(int x, int y, int w, int h, unsigned int color)
     RectVtx *v = sceGuGetMemory(2 * sizeof(RectVtx));
     v[0].color = color; v[0].x = x;     v[0].y = y;     v[0].z = 0;
     v[1].color = color; v[1].x = x + w; v[1].y = y + h; v[1].z = 0;
+    gu_state_2d();
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDrawArray(GU_SPRITES,
                    GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, v);
@@ -245,6 +263,7 @@ static void draw_qr(const unsigned char *qr, int size, int x, int y, int scale)
             v[n].color = 0xFF000000; v[n].x = px + scale; v[n].y = py + scale; v[n].z = 0; n++;
         }
     }
+    gu_state_2d();
     sceGuDisable(GU_TEXTURE_2D);
     sceGuDrawArray(GU_SPRITES,
                    GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, n, 0, v);
@@ -348,7 +367,7 @@ static void draw_top_bar(void)
     /* 赤い丸 + 白い三角で再生ボタン風のロゴにする */
     draw_rect(10, 7, 12, 12, C_ACCENT);
     draw_rect(14, 10, 4, 6, 0xFFFFFFFF);
-    text(28, 19, C_TEXT, 0.8f, "Music");
+    text(28, 18, C_TEXT, 0.68f, "Music");
     if (g_auth && g_account[0] && g_account[0] != '-') {
         float w = intraFontMeasureText(g_font, g_account);
         text(SCR_W - 10 - w * 0.62f, 18, C_DIM, 0.62f, g_account);
@@ -750,7 +769,7 @@ static Screen screen_home_tick(void)
         int base_y = ROW_TOP + row * ROW_PITCH;
         int active = (si == g_section_sel);
 
-        text(10, base_y, active ? C_TEXT : C_DIM, 0.75f, s->title);
+        text(10, base_y, active ? C_TEXT : C_DIM, 0.62f, s->title);
 
         /* 選択中カードが見えるように横スクロール量を決める */
         int visible = (SCR_W - 20) / CARD_PITCH;
@@ -776,9 +795,9 @@ static Screen screen_home_tick(void)
     /* 選択中カードの題名と副題 (PC 版のカード下のテキストに相当) */
     if (cur) {
         draw_rect(0, INFO_Y - 2, SCR_W, 34, 0xFF2A1A12);
-        intraFontSetStyle(g_font, 0.8f, C_TEXT, 0, 0.0f, 0);
+        intraFontSetStyle(g_font, 0.68f, C_TEXT, 0, 0.0f, 0);
         intraFontPrintColumn(g_font, 10, INFO_Y + 11, SCR_W - 20, cur->title);
-        intraFontSetStyle(g_font, 0.62f, C_DIM, 0, 0.0f, 0);
+        intraFontSetStyle(g_font, 0.52f, C_DIM, 0, 0.0f, 0);
         intraFontPrintColumn(g_font, 10, INFO_Y + 26, SCR_W - 20, cur->subtitle);
     }
 
@@ -812,8 +831,6 @@ static Screen screen_playlist_tick(void)
 
     frame_begin();
     draw_chrome(g_pl_title, "上下: 選択    ○: 再生    ×: 戻る");
-    if (g_track_count > 0 && g_track_sel < g_track_count)
-        art_draw(g_tracks[g_track_sel].video_id, SCR_W - 40, 30, 34);
     int y = LIST_TOP;
     for (int i = g_track_scroll;
          i < g_track_count && i < g_track_scroll + LIST_ROWS; i++) {
@@ -864,20 +881,25 @@ static Screen screen_player_tick(void)
     draw_chrome("再生中",
                 "△: 一時停止    L/R: 前後の曲    ×: 一覧へ");
     if (t) {
-        intraFontSetStyle(g_font, 1.1f, C_TEXT, 0, 0.0f, 0);
-        intraFontPrintColumn(g_font, 24, 90, SCR_W - 48, t->title);
-        text(24, 120, C_DIM, 0.85f, t->artist);
+        /* 左に大きなアートワーク、右に曲情報 (PC 版の再生画面と同じ構成) */
+        art_draw(t->video_id, 20, 48, 96);
+
+        const int tx = 132;
+        intraFontSetStyle(g_font, 0.85f, C_TEXT, 0, 0.0f, 0);
+        intraFontPrintColumn(g_font, tx, 66, SCR_W - tx - 16, t->title);
+        intraFontSetStyle(g_font, 0.62f, C_DIM, 0, 0.0f, 0);
+        intraFontPrintColumn(g_font, tx, 100, SCR_W - tx - 16, t->artist);
 
         const char *st_label =
             (st == PLAYER_BUFFERING) ? "バッファリング中..." :
             (st == PLAYER_PAUSED)    ? "一時停止" :
             (st == PLAYER_ERROR)     ? "エラー" :
             (st == PLAYER_PLAYING)   ? "再生中" : "";
-        text(24, 150, (st == PLAYER_ERROR) ? C_ACCENT : C_HEADER, 0.8f, st_label);
+        text(132, 128, (st == PLAYER_ERROR) ? C_ACCENT : C_HEADER, 0.65f, st_label);
         if (st == PLAYER_ERROR) {
             char e[64];
             snprintf(e, sizeof(e), "code: 0x%08X", player_last_error());
-            text(24, 170, C_DIM, 0.7f, e);
+            text(132, 148, C_DIM, 0.6f, e);
         }
 
         /* 進捗バー */
@@ -894,16 +916,16 @@ static Screen screen_player_tick(void)
         } else {
             snprintf(tm, sizeof(tm), "%d:%02d", elapsed / 60, elapsed % 60);
         }
-        text(24, 222, C_DIM, 0.75f, tm);
+        text(24, 222, C_DIM, 0.65f, tm);
 
         if (g_playing_index + 1 < g_track_count) {
             char next[160];
             snprintf(next, sizeof(next), "次の曲: %s",
                      g_tracks[g_playing_index + 1].title);
-            text(24, 244, C_DIM, 0.7f, next);
+            text(24, 243, C_DIM, 0.6f, next);
         }
     } else {
-        text(24, 120, C_DIM, 0.9f, "(再生していません)");
+        text(24, 120, C_DIM, 0.75f, "(再生していません)");
     }
     frame_end();
     return SCR_PLAYER;
