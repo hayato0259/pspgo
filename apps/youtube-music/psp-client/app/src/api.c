@@ -7,9 +7,28 @@
 #include <stdlib.h>
 #include "api.h"
 #include "net.h"
+#include "tsv.h"
 #include "common.h"
 
 static char g_buf[192 * 1024]; /* API レスポンス受信バッファ */
+static char g_error[160];      /* サーバーが返した error 行 */
+
+#define API_ERR_SERVER (-1000)  /* サーバーが error 行を返した */
+
+const char *api_last_error(void) { return g_error; }
+
+/*
+ * 受信本文にサーバーからの error 行が含まれていないか確認する。
+ * PSP 側は HTTP ステータス行を読み飛ばしているため、
+ * これを見ないと「エラー応答」を「空のリスト」と誤認してしまう。
+ */
+static int has_server_error(void)
+{
+    g_error[0] = '\0';
+    if (tsv_value(g_buf, "error", g_error, sizeof(g_error)))
+        return 1;
+    return 0;
+}
 
 static void copy_field(char *dst, int dstsize, const char *src)
 {
@@ -124,6 +143,8 @@ int api_home(ApiItem *items, int max)
     int len = http_get(SERVER_HOST, SERVER_PORT, "/api/home", g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
+    if (has_server_error())
+        return API_ERR_SERVER;
     struct home_ctx ctx = { items, max, 0 };
     for_each_line(g_buf, 4, home_line, &ctx);
     return ctx.count;
@@ -159,6 +180,8 @@ int api_playlist(const char *id, char *title_out, int title_size,
     int len = http_get(SERVER_HOST, SERVER_PORT, path, g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
+    if (has_server_error())
+        return API_ERR_SERVER;
     title_out[0] = '\0';
     struct pl_ctx ctx = { title_out, title_size, tracks, max, 0 };
     for_each_line(g_buf, 5, pl_line, &ctx);

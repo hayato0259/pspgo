@@ -82,9 +82,30 @@
 
 ### 結論として取るべき方針
 
-パーソナライズを実現するなら **公式 Data API v3 で「自分のプレイリスト」を出す**のが
-現実的かつ規約上安全。ytmusicapi の OAuth 経路に期待するのは止める。
-`get_home` 相当の一般向けフィードは未認証クライアントで引き続き取得できる。
+- **マイミックスが欲しいなら、ブラウザ認証 (`auth/browser.json`) を使う。**
+  これは上流でも推奨されている回避策で、OAuth が 400 になる一方
+  ブラウザ認証は正常に動作することが複数報告されている
+  （[ytmusicapi#676](https://github.com/sigma67/ytmusicapi/issues/676),
+  [#682](https://github.com/sigma67/ytmusicapi/discussions/682),
+  [#921](https://github.com/sigma67/ytmusicapi/issues/921)）。
+  サーバーは browser.json を OAuth トークンより優先して使う実装にした
+- QR ログイン（OAuth）は仕組みとして完成しているので残す。
+  将来 OAuth が復旧した場合、および公式 Data API v3 を使う場合に活かせる
+- 一般向けフィードは未認証クライアントで引き続き取得できる
+
+## 音声取得の地雷: `bestaudio` は Opus/WebM を選ぶ — 2026-07-26
+
+`/stream?yt=` が **HTTP 200 を返しながら 0 バイト**になる事象が発生した。
+
+- 原因: `yt-dlp -f bestaudio` が Opus/WebM を選び、それをパイプ経由で
+  ffmpeg に渡すと変換が成立せず、無音のまま終了することがある
+- 対策: **m4a (AAC) を優先する**書式指定に変更した
+  `-f "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio"`
+  → 失敗していた曲が 3 分 11 秒ぶん正常に取得できるようになった
+- あわせて、1 バイトも流れなかった場合に **yt-dlp の標準エラーをログに出す**
+  ようにした。これが無いと「200 なのに無音」で原因が追えない
+- なお同じ曲でも時間帯によって成否が変わることがあり、
+  YouTube 側のスロットリングの影響は残る（PO Token / SABR の節を参照）
 
 ## YouTube Music を音源にすることの規約リスク（誠実な整理)
 

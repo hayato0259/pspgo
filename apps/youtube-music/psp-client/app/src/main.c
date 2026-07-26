@@ -359,7 +359,12 @@ static int load_home(void)
 {
     g_home_count = api_home(g_home_items, API_MAX_ITEMS);
     if (g_home_count < 0) {
-        snprintf(g_error, sizeof(g_error), "home error: %d", g_home_count);
+        /* サーバーが理由を返していればそれを見せる (単なる空表示にしない) */
+        if (api_last_error()[0])
+            snprintf(g_error, sizeof(g_error), "%s", api_last_error());
+        else
+            snprintf(g_error, sizeof(g_error),
+                     "ホームを取得できません (通信エラー %d)", g_home_count);
         return -1;
     }
     g_home_sel = 0;
@@ -508,6 +513,7 @@ static Screen screen_login_tick(void)
             intraFontPrint(g_font, tx, 172, login_user_code());
         } else {
             /* QR が使えない場合はコードを大きく見せる */
+            text(40, 28, C_ACCENT, 0.6f, "(QR コードを受信できませんでした)");
             text(40, 62, C_DIM, 0.75f, "スマートフォンや PC で次の URL を開いてください");
             text(56, 86, C_HEADER, 0.9f, login_url());
             text(40, 118, C_DIM, 0.75f, "そこに、このコードを入力してください:");
@@ -595,6 +601,22 @@ static Screen screen_home_tick(void)
                                    : "○: 開く    START: 終了";
     frame_begin();
     draw_chrome(g_auth ? "ホーム" : "ホーム (未ログイン)", hint);
+
+    if (g_home_count == 0) {
+        /* 空表示のまま放置せず、理由と次の操作を示す */
+        text(24, 80, C_ACCENT, 0.85f, "表示できる項目がありませんでした");
+        if (g_error[0]) {
+            intraFontSetStyle(g_font, 0.7f, C_DIM, 0, 0.0f, 0);
+            intraFontPrintColumn(g_font, 24, 108, SCR_W - 48, g_error);
+        }
+        text(24, 170, C_DIM, 0.7f, "サーバーのログを確認してください");
+        if (g_auth)
+            text(24, 192, C_DIM, 0.7f, "SELECT でログアウトすると一般向け表示に戻ります");
+        draw_now_playing_bar();
+        frame_end();
+        return SCR_HOME;
+    }
+
     int y = LIST_TOP;
     for (int i = g_home_scroll;
          i < g_home_count && i < g_home_scroll + LIST_ROWS; i++) {

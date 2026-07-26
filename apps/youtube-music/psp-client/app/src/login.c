@@ -12,6 +12,7 @@
 #include <stdio.h>
 #include <stdlib.h>
 #include "login.h"
+#include "tsv.h"
 #include "net.h"
 #include "common.h"
 
@@ -45,66 +46,6 @@ const unsigned char *login_qr(int *size)
     return g_qr;
 }
 
-/* "qr\t<size>\t<0/1の羅列>" 行を読み取って g_qr に展開する */
-static void parse_qr(const char *buf)
-{
-    g_qr_size = 0;
-
-    const char *p = buf;
-    const char *line = NULL;
-    while (p && *p) {
-        if (strncmp(p, "qr\t", 3) == 0) {
-            line = p + 3;
-            break;
-        }
-        p = strchr(p, '\n');
-        if (p)
-            p++;
-    }
-    if (!line)
-        return;
-
-    int size = atoi(line);
-    if (size <= 0 || size > QR_MAX)
-        return;
-
-    const char *bits = strchr(line, '\t');
-    if (!bits)
-        return;
-    bits++;
-
-    int need = size * size;
-    for (int i = 0; i < need; i++) {
-        if (bits[i] != '0' && bits[i] != '1')
-            return; /* 途中で切れている: QR なしとして扱う */
-        g_qr[i] = (bits[i] == '1');
-    }
-    g_qr_size = size;
-}
-
-/* TSV から key の値を取り出す。見つからなければ 0 を返す */
-static int tsv_value(const char *buf, const char *key, char *out, int outsize)
-{
-    int klen = strlen(key);
-    const char *p = buf;
-    while (p && *p) {
-        if (strncmp(p, key, klen) == 0 && p[klen] == '\t') {
-            const char *v = p + klen + 1;
-            const char *end = strpbrk(v, "\r\n");
-            int len = end ? (int)(end - v) : (int)strlen(v);
-            if (len > outsize - 1)
-                len = outsize - 1;
-            memcpy(out, v, len);
-            out[len] = '\0';
-            return 1;
-        }
-        p = strchr(p, '\n');
-        if (p)
-            p++;
-    }
-    return 0;
-}
-
 static void set_failed(const char *msg)
 {
     snprintf(g_msg, sizeof(g_msg), "%s", msg);
@@ -120,7 +61,7 @@ static int login_thread(SceSize args, void *argp)
     int len = http_get(SERVER_HOST, SERVER_PORT, "/api/login/start",
                        g_buf, sizeof(g_buf));
     if (len < 0) {
-        set_failed("server ni tsunagarimasen");
+        set_failed("サーバーに接続できません");
         return 0;
     }
     if (tsv_value(g_buf, "error", tmp, sizeof(tmp))) {
@@ -129,11 +70,11 @@ static int login_thread(SceSize args, void *argp)
     }
     if (!tsv_value(g_buf, "code", g_code, sizeof(g_code)) ||
         !tsv_value(g_buf, "url", g_url, sizeof(g_url))) {
-        set_failed("code no shutoku ni shippai");
+        set_failed("コードの取得に失敗しました");
         return 0;
     }
 
-    parse_qr(g_buf);
+    g_qr_size = tsv_qr(g_buf, g_qr, QR_MAX);
 
     int interval = 5;
     if (tsv_value(g_buf, "interval", tmp, sizeof(tmp))) {
@@ -179,7 +120,7 @@ static int login_thread(SceSize args, void *argp)
     if (g_cancel)
         g_state = LOGIN_IDLE;
     else
-        set_failed("code no yuukou kigen kire");
+        set_failed("コードの有効期限が切れました");
     return 0;
 }
 
@@ -196,7 +137,7 @@ int login_begin(void)
 
     g_thread = sceKernelCreateThread("login", login_thread, 0x18, 0x4000, 0, 0);
     if (g_thread < 0) {
-        set_failed("thread sakusei shippai");
+        set_failed("内部エラー (スレッド作成失敗)");
         return g_thread;
     }
     return sceKernelStartThread(g_thread, 0, 0);

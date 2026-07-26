@@ -81,13 +81,21 @@ def reset_yt():
 
 
 def get_yt() -> YTMusic:
+    """認証済みクライアント。
+
+    browser.json を OAuth トークンより優先する。
+    2026-07 時点で OAuth トークンは YouTube Music の内部 API から
+    全エンドポイント 400 で拒否されるが、ブラウザ認証は正常に動作し、
+    マイミックス等のパーソナライズされた内容も取得できる
+    (上流の既知の問題: sigma67/ytmusicapi#676, #921)。
+    """
     global _yt
     with _yt_lock:
         if _yt is None:
-            if TOKEN_FILE.exists() and can_login():
-                _yt = YTMusic(str(TOKEN_FILE), oauth_credentials=credentials())
-            elif BROWSER_FILE.exists():
+            if BROWSER_FILE.exists():
                 _yt = YTMusic(str(BROWSER_FILE))
+            elif TOKEN_FILE.exists() and can_login():
+                _yt = YTMusic(str(TOKEN_FILE), oauth_credentials=credentials())
             else:
                 _yt = YTMusic()
         return _yt
@@ -124,7 +132,15 @@ def with_fallback(fn, what: str):
 
 
 def is_authed() -> bool:
-    return (TOKEN_FILE.exists() and can_login()) or BROWSER_FILE.exists()
+    return BROWSER_FILE.exists() or (TOKEN_FILE.exists() and can_login())
+
+
+def auth_kind() -> str:
+    if BROWSER_FILE.exists():
+        return "browser"
+    if TOKEN_FILE.exists() and can_login():
+        return "oauth"
+    return "none"
 
 
 # --- ログイン (デバイスコードフロー) -------------------------------------
@@ -333,7 +349,7 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _stream_process(self, procs, tail):
+    def _stream_process(self, procs, tail, source=None):
         self.send_response(200)
         self.send_header("Content-Type", "audio/mpeg")
         self.end_headers()
@@ -352,6 +368,15 @@ class Handler(BaseHTTPRequestHandler):
                 if p.poll() is None:
                     p.terminate()
             self.log_message("stream done: %d bytes", sent)
+            # 1 バイトも流れなかったときは、取得側の理由をログに残す。
+            # これが無いと「200 を返したのに無音」で原因が追えない。
+            if sent == 0 and source is not None and source.stderr is not None:
+                try:
+                    err = source.stderr.read(4000).decode("utf-8", "replace").strip()
+                except Exception:
+                    err = ""
+                self.log_message("音声を取得できませんでした: %s",
+                                 err or "(理由の出力なし)")
 
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
@@ -403,14 +428,21 @@ class Handler(BaseHTTPRequestHandler):
             if not target.startswith("http"):
                 target = f"https://music.youtube.com/watch?v={target}"
             ydl = subprocess.Popen(
-                ["yt-dlp", "-q", "-f", "bestaudio", "-o", "-", target],
+                [
+                    "yt-dlp", "--no-warnings", "-o", "-",
+                    # m4a (AAC) を優先する。Opus/WebM はパイプ経由で
+                    # ffmpeg が扱えない場合があり、無音のまま 0 バイトになる
+                    "-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio",
+                    target,
+                ],
                 stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
             )
             ff = subprocess.Popen(
                 ffmpeg_cmd("pipe:0"), stdin=ydl.stdout, stdout=subprocess.PIPE
             )
             ydl.stdout.close()
-            self._stream_process([ydl, ff], ff)
+            self._stream_process([ydl, ff], ff, source=ydl)
             return
 
         self._text("error\tnot found\n", code=404)

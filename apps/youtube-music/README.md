@@ -120,11 +120,23 @@ python3 -m venv .venv && ./.venv/bin/pip install ytmusicapi qrcode
 
 ffmpeg と yt-dlp が PATH にあること（`brew install ffmpeg yt-dlp`）。
 
-ログインはアプリ内で行う（上記「アプリ内ログイン」を参照）。
-`server/auth/oauth_client.json` を置いておけば、あとは PSP の画面だけで完結する。
+### マイミックスを表示したい場合はブラウザ認証を使う
 
-旧方式として、ブラウザのリクエストヘッダを使う `browser.json` も
-`server/auth/` に置けば認識される（`./.venv/bin/ytmusicapi browser` で生成）。
+**2026-07 時点で、OAuth トークンは YouTube Music の内部 API から拒否される**
+（全エンドポイントが HTTP 400。上流の既知の問題で、実装側では回避できない）。
+そのため QR ログインをしても、表示されるのは一般向けのフィードになる。
+
+マイミックス等のパーソナライズされた内容を出すには、**ブラウザ認証**を使う:
+
+```bash
+cd server
+./.venv/bin/ytmusicapi browser   # 指示に従いブラウザのリクエストヘッダを貼る
+mkdir -p auth && mv browser.json auth/
+```
+
+サーバーは `browser.json` があればそれを OAuth トークンより優先して使う。
+どちらも無い場合、あるいは認証クライアントが失敗した場合は、
+一般向けフィードに退避し、ホーム先頭にその旨を表示する。
 
 ### ログインフローのテスト
 
