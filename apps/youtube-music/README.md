@@ -13,7 +13,9 @@ PSP は「HTTP GET + ハードウェア MP3 デコード」だけを行う。
 
 | 画面 | 内容 |
 |---|---|
-| 接続 | Wi-Fi 接続 → サーバーの認証状態を確認 → ホーム取得 |
+| 接続 | Wi-Fi 接続 → サーバーの認証状態を確認 |
+| ログイン選択 | ログインする / ログインせずに使う |
+| ログイン | 入力コードと URL を表示し、承認されるまで待機 |
 | ホーム | セクション見出し付きのプレイリスト一覧（マイミックス等） |
 | プレイリスト | 曲一覧（曲名・アーティスト・長さ） |
 | 再生 | 曲名・状態・経過時間・進捗バー・次曲表示 |
@@ -21,13 +23,48 @@ PSP は「HTTP GET + ハードウェア MP3 デコード」だけを行う。
 | ボタン | 動作 |
 |---|---|
 | 上下 | 選択移動（長押しリピート） |
-| ○ | 決定（プレイリストを開く / 再生開始） |
-| × | 前の画面へ戻る |
+| ○ | 決定（プレイリストを開く / 再生開始 / ログイン開始） |
+| × | 前の画面へ戻る（ログイン中は中止） |
 | △ | 一時停止 / 再開 |
 | L / R | 前の曲 / 次の曲 |
+| SELECT | ホーム画面でログイン / ログアウト |
 | START | 終了 |
 
 曲の終端に達すると自動で次の曲へ進む。
+
+## アプリ内ログイン
+
+**Google 公式の OAuth デバイスコードフロー**（テレビやゲーム機の YouTube アプリと同じ方式）を使う。
+
+1. アプリでログインを選ぶ
+2. 画面に入力コードと URL が表示される
+3. 手元のスマートフォンや PC でその URL を開き、コードを入力して承認する
+4. アプリが自動で承認を検知し、マイミックス等が並ぶホームへ進む
+
+PSP 自体では現代の TLS も JavaScript も扱えないため、Google との通信とトークンの保管は
+サーバーが担う。PSP 側の役割はコードの表示と承認完了のポーリングのみ。
+
+ログインせずに使うこともでき、その場合は一般向けのホームフィードが表示される。
+
+### OAuth クライアントの用意（初回のみ）
+
+Google が要求する仕様上、**自分の Google Cloud プロジェクトで OAuth クライアントを作る必要がある**。
+
+1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを作る
+2. **YouTube Data API v3** を有効化する
+3. 「APIとサービス」→「認証情報」→ OAuth クライアント ID を作成。
+   アプリケーションの種類は **「テレビと入力が制限されているデバイス」** を選ぶ
+4. 発行された client_id / client_secret を `server/auth/oauth_client.json` に置く:
+
+```json
+{ "client_id": "...apps.googleusercontent.com", "client_secret": "..." }
+```
+
+Google Cloud からダウンロードした JSON（`installed` でネストした形式）もそのまま置ける。
+
+未設定の場合、アプリはログイン選択画面を出さず、一般向けホームで起動する。
+
+`server/auth/` は `.gitignore` 済み。**client_secret とトークンをコミットしないこと。**
 
 ## 構成
 
@@ -56,21 +93,24 @@ python3 -m venv .venv && ./.venv/bin/pip install ytmusicapi
 
 ffmpeg と yt-dlp が PATH にあること（`brew install ffmpeg yt-dlp`）。
 
-### ログイン（任意）
+ログインはアプリ内で行う（上記「アプリ内ログイン」を参照）。
+`server/auth/oauth_client.json` を置いておけば、あとは PSP の画面だけで完結する。
 
-PSP 上で Google ログインは技術的に不可能（現代 TLS と JavaScript 実行が必要）なため、
-**認証はサーバー側に一度だけ設定する**。アプリの接続画面はその認証状態を表示する。
+旧方式として、ブラウザのリクエストヘッダを使う `browser.json` も
+`server/auth/` に置けば認識される（`./.venv/bin/ytmusicapi browser` で生成）。
 
-未設定でも一般向けのホームフィードで動作する。マイミックス等の
-パーソナライズされた内容を出したい場合のみ設定する。
+### ログインフローのテスト
+
+実際の Google アカウントを使わずに状態遷移を検証できるフィクスチャがある。
+Google のデバイスコードエンドポイントをモックし、本物の `app.py` を起動する。
 
 ```bash
 cd server
-./.venv/bin/ytmusicapi browser   # 指示に従いブラウザのリクエストヘッダを貼る
-mkdir -p auth && mv browser.json auth/
+./.venv/bin/python tests/mock_google_oauth.py 2 8080   # pending 2回 → 承認
 ```
 
-`server/auth/` は `.gitignore` 済み。**認証ファイルをコミットしないこと。**
+**テスト用の偽 client_id を `auth/` に書き込むので、終わったら
+`rm -f auth/oauth_client.json auth/oauth.json` で消すこと。**
 
 ## PSP アプリのビルド
 

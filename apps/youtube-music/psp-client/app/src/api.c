@@ -54,27 +54,37 @@ static int for_each_line(char *buf, int nfields, line_fn fn, void *ctx)
 
 /* --- /api/status -------------------------------------------------------- */
 
-struct status_ctx { int auth; char *name; int name_size; };
+struct status_ctx { int auth; int can_login; char *name; int name_size; };
 
 static int status_line(char **f, int nf, void *vctx)
 {
     struct status_ctx *ctx = vctx;
     if (strcmp(f[0], "auth") == 0 && nf >= 2)
         ctx->auth = atoi(f[1]);
+    else if (strcmp(f[0], "can_login") == 0 && nf >= 2)
+        ctx->can_login = atoi(f[1]);
     else if (strcmp(f[0], "name") == 0 && nf >= 2)
         copy_field(ctx->name, ctx->name_size, f[1]);
     return 0;
 }
 
-int api_status(char *name_out, int name_size)
+int api_status(char *name_out, int name_size, int *can_login_out)
 {
     int len = http_get(SERVER_HOST, SERVER_PORT, "/api/status", g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
-    struct status_ctx ctx = { 0, name_out, name_size };
+    struct status_ctx ctx = { 0, 0, name_out, name_size };
     name_out[0] = '\0';
     for_each_line(g_buf, 2, status_line, &ctx);
+    if (can_login_out)
+        *can_login_out = ctx.can_login;
     return ctx.auth;
+}
+
+int api_logout(void)
+{
+    int len = http_get(SERVER_HOST, SERVER_PORT, "/api/logout", g_buf, sizeof(g_buf));
+    return (len < 0) ? len : 0;
 }
 
 /* --- /api/home ---------------------------------------------------------- */

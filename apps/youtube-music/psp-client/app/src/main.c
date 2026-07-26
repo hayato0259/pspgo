@@ -18,6 +18,7 @@
 #include "net.h"
 #include "api.h"
 #include "player.h"
+#include "login.h"
 
 PSP_MODULE_INFO("ytmusic", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -33,6 +34,8 @@ PSP_HEAP_SIZE_KB(14 * 1024);
 
 typedef enum {
     SCR_CONNECT,
+    SCR_WELCOME,   /* ログインするか、しないで使うかの選択 */
+    SCR_LOGIN,     /* コード表示 + 承認待ち */
     SCR_HOME,
     SCR_PLAYLIST,
     SCR_PLAYER,
@@ -199,8 +202,10 @@ static char g_pl_title[128];
 
 static int g_playing_index = -1; /* g_tracks 内の再生中インデックス */
 static int g_auth = 0;
+static int g_can_login = 0;      /* サーバーに OAuth クライアントが設定済みか */
 static char g_account[64] = "-";
 static char g_error[128] = "";
+static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 
 /* --- リスト描画共通 --- */
 #define LIST_TOP 42
@@ -246,53 +251,162 @@ static void draw_now_playing_bar(void)
 
 /* --- 各画面 --- */
 
+/* ホームを取得して最初の選択可能行へカーソルを置く。0=成功 */
+static int load_home(void)
+{
+    g_home_count = api_home(g_home_items, API_MAX_ITEMS);
+    if (g_home_count < 0) {
+        snprintf(g_error, sizeof(g_error), "home error: %d", g_home_count);
+        return -1;
+    }
+    g_home_sel = 0;
+    g_home_scroll = 0;
+    while (g_home_sel < g_home_count && g_home_items[g_home_sel].kind == 'S')
+        g_home_sel++;
+    return 0;
+}
+
 static Screen screen_connect_tick(void)
 {
+    static int step = 0;
+
+    if (step == 99) { /* エラー表示で停止 */
+        frame_begin();
+        draw_chrome("YouTube Music for PSP", "START = exit");
+        text(30, 120, C_ACCENT, 0.8f, g_error);
+        frame_end();
+        return SCR_CONNECT;
+    }
+
     frame_begin();
     draw_chrome("YouTube Music for PSP", "setsuzoku-chuu...");
     text(SCR_W / 2 - 60, 120, C_TEXT, 0.9f, "Connecting...");
     text(SCR_W / 2 - 110, 145, C_DIM, 0.7f, "server: " SERVER_HOST);
     frame_end();
 
-    /* 初回のみ実処理 (画面を1度描いてから) */
-    static int step = 0;
     if (step == 0) {
         step = 1;
         return SCR_CONNECT; /* 1フレーム描画してから接続処理へ */
     }
-    if (step == 1) {
-        int rc = net_init();
-        if (rc < 0) {
-            snprintf(g_error, sizeof(g_error), "Wi-Fi error: 0x%08X", rc);
-            step = 99;
-            return SCR_CONNECT;
+
+    int rc = net_init();
+    if (rc < 0) {
+        snprintf(g_error, sizeof(g_error), "Wi-Fi error: 0x%08X", rc);
+        step = 99;
+        return SCR_CONNECT;
+    }
+    rc = api_status(g_account, sizeof(g_account), &g_can_login);
+    if (rc < 0) {
+        snprintf(g_error, sizeof(g_error),
+                 "server error: %d (server kidou zumi?)", rc);
+        step = 99;
+        return SCR_CONNECT;
+    }
+    g_auth = (rc > 0);
+
+    /* 未ログインでログイン可能なら、まず選択画面を出す */
+    if (!g_auth && g_can_login) {
+        g_welcome_sel = 0;
+        return SCR_WELCOME;
+    }
+    if (load_home() < 0) {
+        step = 99;
+        return SCR_CONNECT;
+    }
+    return SCR_HOME;
+}
+
+/* --- ログイン選択画面 --- */
+
+static Screen screen_welcome_tick(void)
+{
+    if (g_pressed & (PSP_CTRL_UP | PSP_CTRL_DOWN))
+        g_welcome_sel ^= 1;
+
+    if (g_pressed & PSP_CTRL_CIRCLE) {
+        if (g_welcome_sel == 0) {
+            login_begin();
+            return SCR_LOGIN;
         }
-        rc = api_status(g_account, sizeof(g_account));
-        if (rc < 0) {
-            snprintf(g_error, sizeof(g_error),
-                     "server error: %d (server kidou zumi?)", rc);
-            step = 99;
-            return SCR_CONNECT;
-        }
-        g_auth = (rc > 0);
-        g_home_count = api_home(g_home_items, API_MAX_ITEMS);
-        if (g_home_count < 0) {
-            snprintf(g_error, sizeof(g_error), "home error: %d", g_home_count);
-            step = 99;
-            return SCR_CONNECT;
-        }
-        /* 最初の選択可能行へ */
-        g_home_sel = 0;
-        while (g_home_sel < g_home_count && g_home_items[g_home_sel].kind == 'S')
-            g_home_sel++;
+        if (load_home() < 0)
+            return SCR_WELCOME;
         return SCR_HOME;
     }
-    /* step 99: エラー表示で停止 */
+
     frame_begin();
-    draw_chrome("YouTube Music for PSP", "START = exit");
-    text(30, 120, C_ACCENT, 0.8f, g_error);
+    draw_chrome("YouTube Music for PSP", "^v: sentaku  O: kettei");
+    text(40, 70, C_TEXT, 0.9f, "Google account de login shimasu ka?");
+    text(40, 92, C_DIM, 0.7f,
+         "login suru to My Mix nado ga hyouji saremasu.");
+
+    const char *opts[2] = { "Login suru", "Login shinaide tsukau" };
+    for (int i = 0; i < 2; i++) {
+        int y = 130 + i * 30;
+        if (i == g_welcome_sel)
+            draw_rect(30, y - 14, SCR_W - 60, 24, C_SEL_BG);
+        text(44, y + 2, (i == g_welcome_sel) ? C_TEXT : C_DIM, 0.85f, opts[i]);
+    }
+    text(40, 215, C_DIM, 0.65f,
+         "login wa TV app to onaji houshiki desu:");
+    text(40, 233, C_DIM, 0.65f,
+         "gamen no code wo sumaho ya PC de nyuuryoku shimasu.");
     frame_end();
-    return SCR_CONNECT;
+    return SCR_WELCOME;
+}
+
+/* --- ログイン待ち画面 --- */
+
+static Screen screen_login_tick(void)
+{
+    LoginState st = login_state();
+
+    if (st == LOGIN_SUCCESS) {
+        /* 認証状態とホームを取り直す */
+        int rc = api_status(g_account, sizeof(g_account), &g_can_login);
+        g_auth = (rc > 0);
+        if (load_home() < 0)
+            return SCR_WELCOME;
+        return SCR_HOME;
+    }
+
+    if (g_pressed & PSP_CTRL_CROSS) {
+        login_cancel();
+        return SCR_WELCOME;
+    }
+    if ((st == LOGIN_FAILED) && (g_pressed & PSP_CTRL_CIRCLE)) {
+        login_begin(); /* やり直す */
+        return SCR_LOGIN;
+    }
+
+    frame_begin();
+    draw_chrome("Login", (st == LOGIN_FAILED) ? "O: yarinaosu  X: modoru"
+                                              : "X: chuushi");
+
+    if (st == LOGIN_REQUESTING) {
+        text(40, 120, C_TEXT, 0.85f, "code wo shutoku shiteimasu...");
+    } else if (st == LOGIN_WAITING) {
+        text(40, 62, C_DIM, 0.75f, "1. sumaho ya PC de kono URL wo hiraku:");
+        text(56, 86, C_HEADER, 0.9f, login_url());
+        text(40, 118, C_DIM, 0.75f, "2. kono code wo nyuuryoku suru:");
+
+        /* コードは大きく、枠付きで表示 */
+        draw_rect(56, 130, SCR_W - 112, 44, 0xFF3A2418);
+        intraFontSetStyle(g_font, 1.7f, C_TEXT, 0, 0.0f, INTRAFONT_ALIGN_CENTER);
+        intraFontPrint(g_font, SCR_W / 2, 162, login_user_code());
+
+        text(40, 196, C_DIM, 0.75f, "3. shounin go, jidou de susumimasu");
+        char rem[64];
+        int r = login_remaining_sec();
+        snprintf(rem, sizeof(rem), "machi... (code yuukou: %d:%02d)",
+                 r / 60, r % 60);
+        text(40, 222, C_HEADER, 0.7f, rem);
+    } else if (st == LOGIN_FAILED) {
+        text(40, 110, C_ACCENT, 0.85f, "login shippai");
+        intraFontSetStyle(g_font, 0.7f, C_DIM, 0, 0.0f, 0);
+        intraFontPrintColumn(g_font, 40, 138, SCR_W - 80, login_message());
+    }
+    frame_end();
+    return SCR_LOGIN;
 }
 
 static Screen screen_home_tick(void)
@@ -335,9 +449,30 @@ static Screen screen_home_tick(void)
         }
     }
 
+    /* SELECT: ログイン / ログアウトの切り替え */
+    if (g_pressed & PSP_CTRL_SELECT) {
+        if (g_auth) {
+            player_stop();
+            api_logout();
+            g_auth = 0;
+            snprintf(g_account, sizeof(g_account), "-");
+            if (g_can_login) {
+                g_welcome_sel = 0;
+                return SCR_WELCOME;
+            }
+            load_home();
+        } else if (g_can_login) {
+            g_welcome_sel = 0;
+            return SCR_WELCOME;
+        }
+    }
+
+    /* ログイン不可 (サーバーに OAuth クライアント未設定) なら案内を出さない */
+    const char *hint = g_auth      ? "O: hiraku  SELECT: logout  START: exit"
+                     : g_can_login ? "O: hiraku  SELECT: login  START: exit"
+                                   : "O: hiraku  START: exit";
     frame_begin();
-    draw_chrome(g_auth ? "Home (login zumi)" : "Home (mi-login)",
-                "^v: sentaku  O: hiraku  START: exit");
+    draw_chrome(g_auth ? "Home" : "Home (mi-login)", hint);
     int y = LIST_TOP;
     for (int i = g_home_scroll;
          i < g_home_count && i < g_home_scroll + LIST_ROWS; i++) {
@@ -497,12 +632,15 @@ int main(void)
 
         switch (scr) {
         case SCR_CONNECT:  scr = screen_connect_tick();  break;
+        case SCR_WELCOME:  scr = screen_welcome_tick();  break;
+        case SCR_LOGIN:    scr = screen_login_tick();    break;
         case SCR_HOME:     scr = screen_home_tick();     break;
         case SCR_PLAYLIST: scr = screen_playlist_tick(); break;
         case SCR_PLAYER:   scr = screen_player_tick();   break;
         }
     }
 
+    login_cancel();
     player_stop();
     intraFontUnload(g_font);
     if (g_font_jpn)

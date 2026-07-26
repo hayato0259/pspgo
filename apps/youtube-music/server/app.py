@@ -5,15 +5,20 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
 すべてのメタデータをタブ区切りテキスト (TSV) で返す。
 
 エンドポイント:
-  GET /api/status            認証状態:  auth\t0|1 / name\t<表示名>
+  GET /api/status            認証状態:  auth\t0|1 / name\t<表示名> / can_login\t0|1
   GET /api/home              ホーム:    section\t<題> / playlist\t<id>\t<題>\t<副題> / video\t<id>\t<題>\t<アーティスト>
   GET /api/playlist?id=<id>  内容:      meta\t<題> / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
+  GET /api/login/start       ログイン開始: code\t<入力コード> / url\t<URL> / interval\t<秒>
+  GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
+  GET /api/logout            トークン破棄
   GET /stream?yt=<videoId>   音声を MP3 CBR 128kbps で配信
   GET /stream?file=<path>    ローカルファイルを変換して配信 (検証用)
 
-認証 (任意): auth/browser.json を置くとログイン済みとして動作し、
-マイミックス等のパーソナライズされたホームが返る。
-未配置なら一般向けホームで動く。設定方法は README を参照。
+ログイン: Google 公式の OAuth デバイスコードフロー (テレビ・ゲーム機と同じ方式) を使う。
+PSP アプリが表示するコードを、手元のスマートフォンや PC で入力するとログインが完了する。
+TLS 通信とトークン保管はこのサーバーが担う。事前に Google Cloud で
+「テレビと入力制限のあるデバイス」種別の OAuth クライアントを作り、
+auth/oauth_client.json に client_id / client_secret を置く (README 参照)。
 
 依存: ffmpeg, yt-dlp, ytmusicapi (.venv)
 使い方: .venv/bin/python app.py [port]   (デフォルト 8080)
@@ -23,31 +28,142 @@ import json
 import shutil
 import subprocess
 import sys
+import threading
+import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
 
-from ytmusicapi import YTMusic
+from ytmusicapi import OAuthCredentials, YTMusic
+from ytmusicapi.auth.oauth import RefreshingToken
 
 BITRATE = "128k"
 CHUNK = 16 * 1024
-AUTH_FILE = Path(__file__).parent / "auth" / "browser.json"
+
+AUTH_DIR = Path(__file__).parent / "auth"
+CLIENT_FILE = AUTH_DIR / "oauth_client.json"   # client_id / client_secret (自分で作る)
+TOKEN_FILE = AUTH_DIR / "oauth.json"           # ログイン後に自動生成されるトークン
+BROWSER_FILE = AUTH_DIR / "browser.json"       # 旧方式 (ブラウザヘッダ) も引き続き使える
 
 _yt = None
+_yt_lock = threading.Lock()
+
+
+def load_client() -> tuple:
+    """OAuth クライアント情報を返す。未設定なら (None, None)。"""
+    if CLIENT_FILE.exists():
+        data = json.loads(CLIENT_FILE.read_text(encoding="utf-8"))
+        # Google Cloud からダウンロードした JSON (installed/web でネストする形) も許容
+        inner = data.get("installed") or data.get("web") or data
+        cid, secret = inner.get("client_id"), inner.get("client_secret")
+        if cid and secret:
+            return cid, secret
+    return None, None
+
+
+def can_login() -> bool:
+    return load_client()[0] is not None
+
+
+def credentials() -> OAuthCredentials:
+    cid, secret = load_client()
+    if not cid:
+        raise RuntimeError(
+            "OAuth クライアント未設定 (auth/oauth_client.json)。README の手順を参照"
+        )
+    return OAuthCredentials(client_id=cid, client_secret=secret)
+
+
+def reset_yt():
+    global _yt
+    with _yt_lock:
+        _yt = None
 
 
 def get_yt() -> YTMusic:
     global _yt
-    if _yt is None:
-        if AUTH_FILE.exists():
-            _yt = YTMusic(str(AUTH_FILE))
-        else:
-            _yt = YTMusic()
-    return _yt
+    with _yt_lock:
+        if _yt is None:
+            if TOKEN_FILE.exists() and can_login():
+                _yt = YTMusic(str(TOKEN_FILE), oauth_credentials=credentials())
+            elif BROWSER_FILE.exists():
+                _yt = YTMusic(str(BROWSER_FILE))
+            else:
+                _yt = YTMusic()
+        return _yt
 
 
 def is_authed() -> bool:
-    return AUTH_FILE.exists()
+    return (TOKEN_FILE.exists() and can_login()) or BROWSER_FILE.exists()
+
+
+# --- ログイン (デバイスコードフロー) -------------------------------------
+
+_login = {"device_code": None, "expires_at": 0}
+_login_lock = threading.Lock()
+
+
+def login_start() -> str:
+    """Google からデバイスコードを取得し、PSP に見せる情報を返す。"""
+    creds = credentials()
+    code = creds.get_code()
+    with _login_lock:
+        _login["device_code"] = code["device_code"]
+        _login["expires_at"] = time.time() + int(code.get("expires_in", 1800))
+    return (
+        f"code\t{clean(code['user_code'])}\n"
+        f"url\t{clean(code['verification_url'])}\n"
+        f"interval\t{int(code.get('interval', 5))}\n"
+        f"expires\t{int(code.get('expires_in', 1800))}\n"
+    )
+
+
+def login_poll() -> str:
+    """1 回だけトークン交換を試す。まだなら pending を返す。"""
+    with _login_lock:
+        device_code = _login["device_code"]
+        expires_at = _login["expires_at"]
+    if not device_code:
+        return "error\tログインが開始されていません\n"
+    if time.time() > expires_at:
+        return "error\tコードの有効期限切れ。やり直してください\n"
+
+    creds = credentials()
+    raw = creds.token_from_code(device_code)
+
+    if "error" in raw:
+        reason = raw["error"]
+        if reason in ("authorization_pending", "slow_down"):
+            return "state\tpending\n"
+        if reason == "access_denied":
+            return "error\tユーザーが許可を拒否しました\n"
+        return f"error\t{clean(reason)}\n"
+
+    # 公式 CLI (prompt_for_token) と同じ手順でトークンを組み立てて保存する
+    expires_in = raw.get("refresh_token_expires_in", raw["expires_in"])
+    token = RefreshingToken(
+        credentials=creds,
+        access_token=raw["access_token"],
+        refresh_token=raw["refresh_token"],
+        scope=raw["scope"],
+        token_type=raw["token_type"],
+        expires_in=expires_in,
+    )
+    token.update(raw)
+    AUTH_DIR.mkdir(parents=True, exist_ok=True)
+    token.local_cache = TOKEN_FILE   # setter が store_token() を呼ぶ
+
+    with _login_lock:
+        _login["device_code"] = None
+    reset_yt()
+    return "state\tok\n"
+
+
+def logout() -> str:
+    if TOKEN_FILE.exists():
+        TOKEN_FILE.unlink()
+    reset_yt()
+    return "state\tok\n"
 
 
 def clean(s) -> str:
@@ -130,7 +246,11 @@ def tsv_status() -> str:
             name = clean(info.get("accountName")) or "-"
         except Exception:
             pass
-    return f"auth\t{1 if is_authed() else 0}\nname\t{name}\n"
+    return (
+        f"auth\t{1 if is_authed() else 0}\n"
+        f"name\t{name}\n"
+        f"can_login\t{1 if can_login() else 0}\n"
+    )
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -180,6 +300,15 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if url.path == "/api/playlist" and "id" in q:
                 self._text(tsv_playlist(q["id"][0]))
+                return
+            if url.path == "/api/login/start":
+                self._text(login_start())
+                return
+            if url.path == "/api/login/poll":
+                self._text(login_poll())
+                return
+            if url.path == "/api/logout":
+                self._text(logout())
                 return
         except Exception as e:
             self.log_message("api error: %r", e)
