@@ -31,13 +31,13 @@ PSP_MODULE_INFO("ytmusic", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
 PSP_HEAP_SIZE_KB(14 * 1024);
 
-/* --- 色 --- */
-#define C_BG      0xFF201510   /* ABGR: 暗い青灰 */
-#define C_TEXT    0xFFEEEEEE
-#define C_DIM     0xFF999999
-#define C_ACCENT  0xFF4040FF   /* 赤 (ABGR) */
-#define C_SEL_BG  0xFF483020
-#define C_HEADER  0xFF66CCFF   /* 黄 */
+/* --- 色 (PC 版 YouTube Music の配色: ほぼ黒 + 白 + ブランド赤) --- */
+#define C_BG      0xFF030303   /* ABGR: 背景 (本家 #030303) */
+#define C_TEXT    0xFFFFFFFF
+#define C_DIM     0xFFAAAAAA   /* 本家のサブテキスト色 */
+#define C_ACCENT  0xFF0000FF   /* ブランド赤 #FF0000 (ABGR) */
+#define C_SEL_BG  0xFF282828   /* 選択行 (本家のホバー色) */
+#define C_HEADER  0xFFE8E8E8
 
 typedef enum {
     SCR_CONNECT,
@@ -263,14 +263,18 @@ static void draw_hgrad(int x, int y, int w, int h,
     sceGuEnable(GU_TEXTURE_2D);
 }
 
-/* XMB 風のゆっくり流れる背景の光 (両端をフェードさせる) */
+/*
+ * 背景。PC 版 YouTube Music と同じ「ほぼ黒 + 最上部だけうっすら明るい」構成。
+ * その上に XMB 風のゆっくり流れる光をごく薄く重ねる。
+ */
 static void draw_bg(void)
 {
-    draw_vgrad(0, 0, SCR_W, SCR_H, 0xFF2A1C12, 0xFF0D0805);
+    draw_vgrad(0, 0, SCR_W, 110, 0xFF2A2420, C_BG);
+    draw_rect(0, 110, SCR_W, SCR_H - 110, C_BG);
     int t = (int)(g_frame / 2) % (SCR_W + 240);
     int x = t - 240;
-    draw_hgrad(x, 0, 120, SCR_H, 0x00FFFFFF, 0x10FFFFFF);
-    draw_hgrad(x + 120, 0, 120, SCR_H, 0x10FFFFFF, 0x00FFFFFF);
+    draw_hgrad(x, 0, 120, SCR_H, 0x00FFFFFF, 0x08FFFFFF);
+    draw_hgrad(x + 120, 0, 120, SCR_H, 0x08FFFFFF, 0x00FFFFFF);
 }
 
 static void text(float x, float y, unsigned int color, float size, const char *s)
@@ -332,23 +336,38 @@ static unsigned int g_glow[GLOW_SIDE * GLOW_SIDE] __attribute__((aligned(16)));
 
 static void make_ui_textures(void)
 {
-    /* ロゴ: 中心 (15.5,15.5) 半径 13 の赤円、右向き三角は白 */
+    /*
+     * ロゴ: YouTube Music の公式アイコンと同じ
+     * 「赤い円 + 白いリング + 白い再生三角」。
+     * 中心 (15.5,15.5)、円の半径 13.5、リングは半径 8.0 (太さ 2.2)。
+     * 各要素は距離関数で 1px ぶんなだらかに減衰させてアンチエイリアスする。
+     */
     for (int y = 0; y < LOGO_SIDE; y++) {
         for (int x = 0; x < LOGO_SIDE; x++) {
             float dx = x - 15.5f, dy = y - 15.5f;
             float d = sqrtf(dx * dx + dy * dy);
-            unsigned int px = 0x00000000;
-            if (d < 13.5f) {
-                int a = (d > 12.5f) ? (int)((13.5f - d) * 255) : 255;
-                px = ((unsigned)a << 24) | 0x0000FF;          /* 赤 (ABGR) */
-                /* 三角形: x in [12,22], 上下幅は x に比例して狭まる */
-                float t = (x - 12.0f) / 10.0f;
-                if (t >= 0.0f && t <= 1.0f) {
-                    float half = 6.5f * (1.0f - t);
-                    if (dy > -half && dy < half && x >= 12)
-                        px = ((unsigned)a << 24) | 0xFFFFFF;  /* 白 */
-                }
+
+            float edge = 13.5f - d;              /* 円の外形 (>=1 で不透明) */
+            if (edge <= 0.0f) {
+                g_logo[y * LOGO_SIDE + x] = 0x00000000;
+                continue;
             }
+            float alpha = (edge < 1.0f) ? edge : 1.0f;
+
+            /* 白の被覆率: リングと三角のうち近い方 */
+            float ring = 1.1f - fabsf(d - 8.0f);
+            float tri = -1.0f;
+            float t = (x - 13.1f) / 7.2f;        /* 三角: x 13.1..20.3 */
+            if (t >= 0.0f && t <= 1.0f)
+                tri = 3.6f * (1.0f - t) - fabsf(dy);
+            float w = (ring > tri) ? ring : tri;
+            if (w < 0.0f) w = 0.0f;
+            if (w > 1.0f) w = 1.0f;
+
+            /* 赤 (0,0,255=R in ABGR) と白を被覆率で混ぜる */
+            unsigned int c = (unsigned)(w * 255.0f);
+            unsigned int px = ((unsigned)(alpha * 255.0f) << 24) |
+                              (c << 16) | (c << 8) | 0xFF;
             g_logo[y * LOGO_SIDE + x] = px;
         }
     }
@@ -488,19 +507,19 @@ static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う
 #define ROW_PITCH  91    /* セクション 1 段の高さ */
 #define INFO_Y     224   /* 選択中カードの題名を出す帯 */
 
-/* YouTube Music 風のトップバー (赤いロゴ + アカウント名) */
+/*
+ * トップバー。PC 版と同じく背景に帯を敷かず、ロゴ + Music ロゴタイプを
+ * 黒地に直接置く。ロゴタイプは 2 度描きで太字に見せる。
+ */
 static void draw_top_bar(void)
 {
-    draw_vgrad(0, 0, SCR_W, 28, 0xFF241812, 0xFF120C08);
-    /* 円形ロゴ (起動時に生成したテクスチャ) + Music ロゴタイプ */
-    blit_tex(g_logo, LOGO_SIDE, 16, 5, 18, 18, 0xFFFFFFFF);
-    text(40, 19, C_TEXT, 0.78f, "Music");
+    blit_tex(g_logo, LOGO_SIDE, MARGIN, 4, 20, 20, 0xFFFFFFFF);
+    text(MARGIN + 26, 19, C_TEXT, 0.82f, "Music");
+    text(MARGIN + 26.6f, 19, C_TEXT, 0.82f, "Music");
     if (g_auth && g_account[0] && g_account[0] != '-') {
         float w = intraFontMeasureText(g_font, g_account);
-        text(SCR_W - 16 - w * 0.6f, 19, C_DIM, 0.6f, g_account);
+        text(SCR_W - MARGIN - w * 0.6f, 19, C_DIM, 0.6f, g_account);
     }
-    draw_hgrad(0, 28, SCR_W / 2, 1, 0xFF2020C0, 0x202020C0);
-    draw_hgrad(SCR_W / 2, 28, SCR_W / 2, 1, 0x202020C0, 0x00000000);
 }
 
 static void scroll_to(int sel, int *scroll)
@@ -513,13 +532,16 @@ static void scroll_to(int sel, int *scroll)
 
 static void draw_chrome(const char *title, const char *hint)
 {
-    draw_rect(0, 0, SCR_W, 24, 0xFF2A1A10);
-    draw_rect(0, 24, SCR_W, 1, C_ACCENT);
-    text(8, 17, C_TEXT, 0.9f, title);
+    /* PC 版に合わせた黒基調: 小さいロゴ + 太字タイトル + 細いグレー罫線 */
+    blit_tex(g_logo, LOGO_SIDE, 8, 4, 16, 16, 0xFFFFFFFF);
+    text(30, 17, C_TEXT, 0.85f, title);
+    text(30.6f, 17, C_TEXT, 0.85f, title);
     if (g_auth)
         text(SCR_W - 8 - intraFontMeasureText(g_font, g_account) * 0.7f, 17,
              C_DIM, 0.7f, g_account);
-    draw_rect(0, SCR_H - 18, SCR_W, 18, 0xFF2A1A10);
+    draw_rect(0, 24, SCR_W, 1, 0xFF303030);
+    draw_rect(0, SCR_H - 18, SCR_W, 18, 0xFF0A0A0A);
+    draw_rect(0, SCR_H - 18, SCR_W, 1, 0xFF303030);
     text(8, SCR_H - 5, C_DIM, 0.65f, hint);
 }
 
@@ -538,8 +560,8 @@ static void draw_now_playing_bar(void)
     ApiTrack *t = &g_tracks[g_playing_index];
     int top = SCR_H - BAR_H;
 
-    draw_vgrad(0, top, SCR_W, BAR_H, 0xF8241812, 0xF8100A06);
-    draw_rect(0, top, SCR_W, 1, 0x804040FF);
+    draw_vgrad(0, top, SCR_W, BAR_H, 0xF8202020, 0xF80D0D0D);
+    draw_rect(0, top, SCR_W, 1, 0xFF303030);
 
     art_draw(t->video_id, 3, top + 3, 26);
 
@@ -564,7 +586,7 @@ static void draw_now_playing_bar(void)
 
     /* 進捗バー */
     int bw = SCR_W - 8;
-    draw_rect(4, SCR_H - 4, bw, 2, 0xFF3A2A22);
+    draw_rect(4, SCR_H - 4, bw, 2, 0xFF303030);
     if (t->duration_sec > 0) {
         int w = bw * el / t->duration_sec;
         if (w > bw) w = bw;
@@ -786,7 +808,7 @@ static Screen screen_login_tick(void)
             text(40, 62, C_DIM, 0.75f, "スマートフォンや PC で次の URL を開いてください");
             text(56, 86, C_HEADER, 0.9f, login_url());
             text(40, 118, C_DIM, 0.75f, "そこに、このコードを入力してください:");
-            draw_rect(56, 130, SCR_W - 112, 44, 0xFF3A2418);
+            draw_rect(56, 130, SCR_W - 112, 44, 0xFF282828);
             intraFontSetStyle(g_font, 1.7f, C_TEXT, 0, 0.0f, INTRAFONT_ALIGN_CENTER);
             intraFontPrint(g_font, SCR_W / 2, 162, login_user_code());
         }
@@ -906,8 +928,11 @@ static Screen screen_home_tick(void)
         int base_y = ROW_TOP + row * ROW_PITCH;
         int active = (si == g_section_sel);
 
-        text(MARGIN, base_y, active ? C_TEXT : C_DIM, active ? 0.68f : 0.6f,
+        /* 見出し。PC 版の大きな太字タイトルに合わせ、選択中は 2 度描きで太らせる */
+        text(MARGIN, base_y, active ? C_TEXT : C_DIM, active ? 0.72f : 0.6f,
              s->title);
+        if (active)
+            text(MARGIN + 0.6f, base_y, C_TEXT, 0.72f, s->title);
 
         /* 目標スクロール位置へ滑らかに寄せる (XMB 風の慣性) */
         int visible = (SCR_W - MARGIN * 2 + CARD_PITCH - 1) / CARD_PITCH;
@@ -972,7 +997,7 @@ static Screen screen_home_tick(void)
 
     /* 選択中カードの題名と副題 (PC 版のカード下のテキストに相当) */
     if (cur) {
-        draw_vgrad(0, INFO_Y - 4, SCR_W, 36, 0xF0281A10, 0xF0140C08);
+        draw_vgrad(0, INFO_Y - 4, SCR_W, 36, 0xF0181818, 0xF0060606);
         intraFontSetStyle(g_font, 0.68f, C_TEXT, 0, 0.0f, 0);
         intraFontPrintColumn(g_font, 10, INFO_Y + 11, SCR_W - 20, cur->title);
         intraFontSetStyle(g_font, 0.52f, C_DIM, 0, 0.0f, 0);
@@ -1021,7 +1046,7 @@ static Screen screen_playlist_tick(void)
          i < g_track_count && i < g_track_scroll + LIST_ROWS; i++) {
         ApiTrack *t = &g_tracks[i];
         if (i == g_track_sel) {
-            draw_vgrad(0, y, SCR_W, ROW_H, 0xE0402818, 0xE0281810);
+            draw_vgrad(0, y, SCR_W, ROW_H, 0xE0303030, 0xE0202020);
             draw_rect(0, y, 3, ROW_H, C_ACCENT);   /* 左端のアクセント */
         }
         art_draw(t->video_id, 8, y + 2, ROW_H - 4);
@@ -1078,9 +1103,8 @@ static Screen screen_player_tick(void)
     draw_chrome("再生中",
                 "△: 一時停止    L/R: 前後の曲    ×: 一覧へ");
     if (t) {
-        /* 左に大きなアートワーク (影+白枠)、右に曲情報 */
+        /* 左に大きなアートワーク (影のみ。PC 版と同じく枠なし)、右に曲情報 */
         draw_rect(26, 54, 128, 128, 0xA0000000);
-        draw_rect(19, 47, 130, 130, 0x50FFFFFF);
         art_draw(t->video_id, 20, 48, 128);
 
         const int tx = 168;
@@ -1110,8 +1134,8 @@ static Screen screen_player_tick(void)
                      t->duration_sec / 60, t->duration_sec % 60);
             int w = (SCR_W - 48) * elapsed / t->duration_sec;
             if (w > SCR_W - 48) w = SCR_W - 48;
-            draw_vgrad(24, 200, SCR_W - 48, 7, 0xFF4A3A30, 0xFF2A2018);
-            draw_vgrad(24, 200, w, 7, 0xFF3030FF, 0xFF0000C8);
+            draw_vgrad(24, 200, SCR_W - 48, 7, 0xFF303030, 0xFF1A1A1A);
+            draw_vgrad(24, 200, w, 7, 0xFF2020FF, 0xFF0000C8);
             draw_rect(24 + w - 3, 197, 7, 13, 0xFFFFFFFF);   /* つまみ */
         } else {
             snprintf(tm, sizeof(tm), "%d:%02d", elapsed / 60, elapsed % 60);
