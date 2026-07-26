@@ -25,6 +25,7 @@
 #include "player.h"
 #include "login.h"
 #include "art.h"
+#include "snd.h"
 
 PSP_MODULE_INFO("ytmusic", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -48,6 +49,7 @@ typedef enum {
 } Screen;
 
 static int g_running = 1;
+static unsigned int g_frame = 0;   /* アニメーション用フレームカウンタ */
 
 /* --- 終了コールバック --- */
 static int exit_callback(int arg1, int arg2, void *common)
@@ -103,6 +105,7 @@ static void gu_init(void)
     sceGuEnable(GU_TEXTURE_2D);
     sceGuEnable(GU_BLEND);
     sceGuBlendFunc(GU_ADD, GU_SRC_ALPHA, GU_ONE_MINUS_SRC_ALPHA, 0, 0);
+    sceGuShadeModel(GU_SMOOTH);
     sceGuFinish();
     sceGuSync(0, 0);
     sceDisplayWaitVblankStart();
@@ -163,6 +166,8 @@ static void gu_state_2d(void)
     sceGuDisable(GU_CULL_FACE);
 }
 
+static void draw_bg(void);
+
 static void frame_begin(void)
 {
     sceGuStart(GU_DIRECT, g_gu_list);
@@ -170,6 +175,7 @@ static void frame_begin(void)
     sceGuClearColor(C_BG);
     sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+    draw_bg();
 }
 
 #ifdef SHOTDUMP
@@ -225,6 +231,48 @@ static void draw_rect(int x, int y, int w, int h, unsigned int color)
     sceGuEnable(GU_TEXTURE_2D);
 }
 
+/* 縦方向グラデーション (上端色 → 下端色) */
+static void draw_vgrad(int x, int y, int w, int h,
+                       unsigned int top, unsigned int bottom)
+{
+    RectVtx *v = sceGuGetMemory(4 * sizeof(RectVtx));
+    v[0].color = top;    v[0].x = x;     v[0].y = y;     v[0].z = 0;
+    v[1].color = top;    v[1].x = x + w; v[1].y = y;     v[1].z = 0;
+    v[2].color = bottom; v[2].x = x;     v[2].y = y + h; v[2].z = 0;
+    v[3].color = bottom; v[3].x = x + w; v[3].y = y + h; v[3].z = 0;
+    gu_state_2d();
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDrawArray(GU_TRIANGLE_STRIP,
+                   GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 4, 0, v);
+    sceGuEnable(GU_TEXTURE_2D);
+}
+
+/* 横方向グラデーション (左端色 → 右端色) */
+static void draw_hgrad(int x, int y, int w, int h,
+                       unsigned int left, unsigned int right)
+{
+    RectVtx *v = sceGuGetMemory(4 * sizeof(RectVtx));
+    v[0].color = left;  v[0].x = x;     v[0].y = y;     v[0].z = 0;
+    v[1].color = right; v[1].x = x + w; v[1].y = y;     v[1].z = 0;
+    v[2].color = left;  v[2].x = x;     v[2].y = y + h; v[2].z = 0;
+    v[3].color = right; v[3].x = x + w; v[3].y = y + h; v[3].z = 0;
+    gu_state_2d();
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDrawArray(GU_TRIANGLE_STRIP,
+                   GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 4, 0, v);
+    sceGuEnable(GU_TEXTURE_2D);
+}
+
+/* XMB 風のゆっくり流れる背景の光 (両端をフェードさせる) */
+static void draw_bg(void)
+{
+    draw_vgrad(0, 0, SCR_W, SCR_H, 0xFF2A1C12, 0xFF0D0805);
+    int t = (int)(g_frame / 2) % (SCR_W + 240);
+    int x = t - 240;
+    draw_hgrad(x, 0, 120, SCR_H, 0x00FFFFFF, 0x10FFFFFF);
+    draw_hgrad(x + 120, 0, 120, SCR_H, 0x10FFFFFF, 0x00FFFFFF);
+}
+
 static void text(float x, float y, unsigned int color, float size, const char *s)
 {
     intraFontSetStyle(g_font, size, color, 0, 0.0f, 0);
@@ -268,6 +316,85 @@ static void draw_qr(const unsigned char *qr, int size, int x, int y, int scale)
     sceGuDrawArray(GU_SPRITES,
                    GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, n, 0, v);
     sceGuEnable(GU_TEXTURE_2D);
+}
+
+/* --- 手続きテクスチャ ---------------------------------------------------
+ * 画像アセットを持たず、起動時に CPU で生成する。
+ *  - ロゴ: 赤い円 + 白い再生三角 (YouTube Music 風)
+ *  - 光彩: 角丸ボックスから柔らかく減衰する白 (XMB 的な選択表現)
+ */
+#include <math.h>
+
+#define LOGO_SIDE 32
+#define GLOW_SIDE 64
+static unsigned int g_logo[LOGO_SIDE * LOGO_SIDE] __attribute__((aligned(16)));
+static unsigned int g_glow[GLOW_SIDE * GLOW_SIDE] __attribute__((aligned(16)));
+
+static void make_ui_textures(void)
+{
+    /* ロゴ: 中心 (15.5,15.5) 半径 13 の赤円、右向き三角は白 */
+    for (int y = 0; y < LOGO_SIDE; y++) {
+        for (int x = 0; x < LOGO_SIDE; x++) {
+            float dx = x - 15.5f, dy = y - 15.5f;
+            float d = sqrtf(dx * dx + dy * dy);
+            unsigned int px = 0x00000000;
+            if (d < 13.5f) {
+                int a = (d > 12.5f) ? (int)((13.5f - d) * 255) : 255;
+                px = ((unsigned)a << 24) | 0x0000FF;          /* 赤 (ABGR) */
+                /* 三角形: x in [12,22], 上下幅は x に比例して狭まる */
+                float t = (x - 12.0f) / 10.0f;
+                if (t >= 0.0f && t <= 1.0f) {
+                    float half = 6.5f * (1.0f - t);
+                    if (dy > -half && dy < half && x >= 12)
+                        px = ((unsigned)a << 24) | 0xFFFFFF;  /* 白 */
+                }
+            }
+            g_logo[y * LOGO_SIDE + x] = px;
+        }
+    }
+    /* 光彩: 中央の角丸ボックス (±16, r=8) からの距離で減衰する白 */
+    for (int y = 0; y < GLOW_SIDE; y++) {
+        for (int x = 0; x < GLOW_SIDE; x++) {
+            float dx = fabsf(x - 31.5f) - 16.0f;
+            float dy = fabsf(y - 31.5f) - 16.0f;
+            if (dx < 0) dx = 0;
+            if (dy < 0) dy = 0;
+            float d = sqrtf(dx * dx + dy * dy);
+            float a = 1.0f - d / 15.0f;
+            if (a < 0) a = 0;
+            a = a * a;                       /* 端ほど急に落とすと柔らかく見える */
+            g_glow[y * GLOW_SIDE + x] =
+                ((unsigned)(a * 255.0f) << 24) | 0x00FFFFFF;
+        }
+    }
+    sceKernelDcacheWritebackRange(g_logo, sizeof(g_logo));
+    sceKernelDcacheWritebackRange(g_glow, sizeof(g_glow));
+}
+
+typedef struct { short u, v; short x, y, z; } TexVtx2;
+
+static void blit_tex(const unsigned int *tex, int texside,
+                     int x, int y, int w, int h, unsigned int tint)
+{
+    gu_state_2d();
+    sceGuEnable(GU_TEXTURE_2D);
+    sceGuTexMode(GU_PSM_8888, 0, 0, 0);
+    sceGuTexImage(0, texside, texside, texside, tex);
+    sceGuTexFunc(GU_TFX_MODULATE, GU_TCC_RGBA);
+    sceGuTexFilter(GU_LINEAR, GU_LINEAR);
+    sceGuColor(tint);
+    TexVtx2 *v = sceGuGetMemory(2 * sizeof(TexVtx2));
+    v[0].u = 0;       v[0].v = 0;       v[0].x = x;     v[0].y = y;     v[0].z = 0;
+    v[1].u = texside; v[1].v = texside; v[1].x = x + w; v[1].y = y + h; v[1].z = 0;
+    sceGuDrawArray(GU_SPRITES,
+                   GU_TEXTURE_16BIT | GU_VERTEX_16BIT | GU_TRANSFORM_2D, 2, 0, v);
+}
+
+/* XMB 風の白い光彩。alpha 0-255 */
+static void draw_glow(int x, int y, int w, int h, int alpha)
+{
+    blit_tex(g_glow, GLOW_SIDE, x - w / 4, y - h / 4, w + w / 2, h + h / 2,
+             ((unsigned)alpha << 24) | 0x00FFFFFF);
 }
 
 /* --- 入力 (エッジ検出) --- */
@@ -354,25 +481,26 @@ static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う
 #define ROW_H 18
 
 /* ホーム (カルーセル) のレイアウト。PC 版の構造を 480x272 に落とし込む */
-#define CARD_SIZE  64
-#define CARD_PITCH 72
-#define ROW_TOP    44    /* 1 段目のセクション見出しのベースライン */
-#define ROW_PITCH  92    /* セクション 1 段の高さ */
-#define INFO_Y     222   /* 選択中カードの題名を出す帯 */
+#define MARGIN     16    /* 画面端の余白 (PC 版に合わせて統一) */
+#define CARD_SIZE  62
+#define CARD_PITCH 74    /* カード + 12px の間隔 */
+#define ROW_TOP    47    /* 1 段目のセクション見出しのベースライン */
+#define ROW_PITCH  91    /* セクション 1 段の高さ */
+#define INFO_Y     224   /* 選択中カードの題名を出す帯 */
 
 /* YouTube Music 風のトップバー (赤いロゴ + アカウント名) */
 static void draw_top_bar(void)
 {
-    draw_rect(0, 0, SCR_W, 26, 0xFF17100C);
-    /* 赤い丸 + 白い三角で再生ボタン風のロゴにする */
-    draw_rect(10, 7, 12, 12, C_ACCENT);
-    draw_rect(14, 10, 4, 6, 0xFFFFFFFF);
-    text(28, 18, C_TEXT, 0.68f, "Music");
+    draw_vgrad(0, 0, SCR_W, 28, 0xFF241812, 0xFF120C08);
+    /* 円形ロゴ (起動時に生成したテクスチャ) + Music ロゴタイプ */
+    blit_tex(g_logo, LOGO_SIDE, 16, 5, 18, 18, 0xFFFFFFFF);
+    text(40, 19, C_TEXT, 0.78f, "Music");
     if (g_auth && g_account[0] && g_account[0] != '-') {
         float w = intraFontMeasureText(g_font, g_account);
-        text(SCR_W - 10 - w * 0.62f, 18, C_DIM, 0.62f, g_account);
+        text(SCR_W - 16 - w * 0.6f, 19, C_DIM, 0.6f, g_account);
     }
-    draw_rect(0, 26, SCR_W, 1, 0xFF30201A);
+    draw_hgrad(0, 28, SCR_W / 2, 1, 0xFF2020C0, 0x202020C0);
+    draw_hgrad(SCR_W / 2, 28, SCR_W / 2, 1, 0x202020C0, 0x00000000);
 }
 
 static void scroll_to(int sel, int *scroll)
@@ -410,8 +538,8 @@ static void draw_now_playing_bar(void)
     ApiTrack *t = &g_tracks[g_playing_index];
     int top = SCR_H - BAR_H;
 
-    draw_rect(0, top, SCR_W, BAR_H, 0xFF1A120E);
-    draw_rect(0, top, SCR_W, 1, 0xFF30201A);
+    draw_vgrad(0, top, SCR_W, BAR_H, 0xF8241812, 0xF8100A06);
+    draw_rect(0, top, SCR_W, 1, 0x804040FF);
 
     art_draw(t->video_id, 3, top + 3, 26);
 
@@ -566,10 +694,13 @@ static Screen screen_connect_tick(void)
 
 static Screen screen_welcome_tick(void)
 {
-    if (g_pressed & (PSP_CTRL_UP | PSP_CTRL_DOWN))
+    if (g_pressed & (PSP_CTRL_UP | PSP_CTRL_DOWN)) {
         g_welcome_sel ^= 1;
+        snd_play(SND_MOVE);
+    }
 
     if (g_pressed & PSP_CTRL_CIRCLE) {
+        snd_play(SND_OK);
         if (g_welcome_sel == 0) {
             login_begin();
             return SCR_LOGIN;
@@ -680,19 +811,23 @@ static Screen screen_home_tick(void)
     Section *sec = (g_section_sel < g_section_count) ? &g_sections[g_section_sel] : NULL;
 
     /* 左右でカード移動、上下でセクション移動 (PC 版の横スクロールと同じ操作) */
-    if (sec && (g_pressed & PSP_CTRL_LEFT) && sec->cursor > 0)
+    if (sec && (g_pressed & PSP_CTRL_LEFT) && sec->cursor > 0) {
         sec->cursor--;
-    if (sec && (g_pressed & PSP_CTRL_RIGHT) && sec->cursor < sec->count - 1)
+        snd_play(SND_MOVE);
+    }
+    if (sec && (g_pressed & PSP_CTRL_RIGHT) && sec->cursor < sec->count - 1) {
         sec->cursor++;
+        snd_play(SND_MOVE);
+    }
     if (g_pressed & PSP_CTRL_UP) {
         int i = g_section_sel - 1;
         while (i >= 0 && g_sections[i].count == 0) i--;
-        if (i >= 0) g_section_sel = i;
+        if (i >= 0) { g_section_sel = i; snd_play(SND_MOVE); }
     }
     if (g_pressed & PSP_CTRL_DOWN) {
         int i = g_section_sel + 1;
         while (i < g_section_count && g_sections[i].count == 0) i++;
-        if (i < g_section_count) g_section_sel = i;
+        if (i < g_section_count) { g_section_sel = i; snd_play(SND_MOVE); }
     }
     /* 選択中セクションが画面に入るようにする (同時に 2 段まで表示) */
     if (g_section_sel < g_section_top)
@@ -720,6 +855,7 @@ static Screen screen_home_tick(void)
 
     ApiItem *cur = selected_card();
     if ((g_pressed & PSP_CTRL_CIRCLE) && cur) {
+        snd_play(SND_OK);
         if (cur->kind == 'P') {
             g_track_count = api_playlist(cur->id, g_pl_title, sizeof(g_pl_title),
                                          g_tracks, API_MAX_TRACKS);
@@ -739,7 +875,7 @@ static Screen screen_home_tick(void)
             g_track_count = 1;
             g_track_sel = 0;
             g_playing_index = 0;
-            player_start(g_tracks[0].video_id);
+            player_start(g_tracks[0].video_id, 0);
             return SCR_PLAYER;
         }
     }
@@ -760,7 +896,8 @@ static Screen screen_home_tick(void)
         return SCR_HOME;
     }
 
-    /* セクションを最大 2 段、横並びのカードで描く */
+    /* セクションを最大 2 段、横並びのカードで描く (XMB 風の滑らかスクロール) */
+    static float scrollf[MAX_SECTIONS];   /* セクションごとの表示上のスクロール位置 */
     for (int row = 0; row < 2; row++) {
         int si = g_section_top + row;
         if (si >= g_section_count)
@@ -769,32 +906,73 @@ static Screen screen_home_tick(void)
         int base_y = ROW_TOP + row * ROW_PITCH;
         int active = (si == g_section_sel);
 
-        text(10, base_y, active ? C_TEXT : C_DIM, 0.62f, s->title);
+        text(MARGIN, base_y, active ? C_TEXT : C_DIM, active ? 0.68f : 0.6f,
+             s->title);
 
-        /* 選択中カードが見えるように横スクロール量を決める */
-        int visible = (SCR_W - 20) / CARD_PITCH;
+        /* 目標スクロール位置へ滑らかに寄せる (XMB 風の慣性) */
+        int visible = (SCR_W - MARGIN * 2 + CARD_PITCH - 1) / CARD_PITCH;
         if (visible < 1) visible = 1;
-        int scroll = s->cursor - visible / 2;
-        if (scroll > s->count - visible) scroll = s->count - visible;
-        if (scroll < 0) scroll = 0;
+        int target = s->cursor - visible / 2;
+        if (target > s->count - visible) target = s->count - visible;
+        if (target < 0) target = 0;
+        scrollf[si] += ((float)target - scrollf[si]) * 0.22f;
+        if (scrollf[si] < 0) scrollf[si] = 0;
 
-        for (int c = 0; c < visible && scroll + c < s->count; c++) {
-            int idx = s->first + scroll + c;
+        int first = (int)scrollf[si];
+        float frac = scrollf[si] - (float)first;
+        int sel_x = -1, sel_idx = -1;
+
+        for (int c = 0; c <= visible && first + c < s->count; c++) {
+            int idx = s->first + first + c;
             if (idx >= g_home_count)
                 break;
             ApiItem *it = &g_home_items[idx];
-            int x = 10 + c * CARD_PITCH;
-            int y = base_y + 6;
+            int x = MARGIN + (int)((float)c * CARD_PITCH - frac * CARD_PITCH);
+            int y = base_y + 9;
+            if (x > SCR_W)
+                break;
 
-            if (active && (scroll + c) == s->cursor)
-                draw_rect(x - 3, y - 3, CARD_SIZE + 6, CARD_SIZE + 6, C_ACCENT);
+            if (active && (first + c) == s->cursor) {
+                sel_x = x;      /* 選択カードは最後に大きく描く */
+                sel_idx = idx;
+                continue;
+            }
+            draw_rect(x + 2, y + 3, CARD_SIZE, CARD_SIZE, 0x60000000); /* 影 */
             art_draw(it->id, x, y, CARD_SIZE);
+        }
+
+        if (sel_idx >= 0) {
+            /*
+             * 選択中カード:
+             *  - 選択が変わった瞬間から 1.0 → 1.16 倍へイージングで拡大
+             *  - 枠線ではなく、XMB 的な白い光彩 (ゆっくり脈動) をまとわせる
+             */
+            static int prev_sec = -1, prev_cur = -1;
+            static float grow = 0.0f;
+            if (prev_sec != g_section_sel || prev_cur != s->cursor) {
+                prev_sec = g_section_sel;
+                prev_cur = s->cursor;
+                grow = 0.0f;
+            }
+            grow += (1.0f - grow) * 0.18f;
+
+            int size = CARD_SIZE + (int)(10.0f * grow);
+            int cx = sel_x + CARD_SIZE / 2, cy = base_y + 9 + CARD_SIZE / 2;
+            int x = cx - size / 2, y = cy - size / 2;
+
+            unsigned int pulse = (g_frame / 2) % 80;
+            if (pulse > 40) pulse = 80 - pulse;
+            int glow_a = 120 + (int)(pulse * 2.4f);
+
+            draw_glow(x, y, size, size, glow_a);
+            draw_rect(x + 3, y + 4, size, size, 0x80000000);  /* 影 */
+            art_draw(g_home_items[sel_idx].id, x, y, size);
         }
     }
 
     /* 選択中カードの題名と副題 (PC 版のカード下のテキストに相当) */
     if (cur) {
-        draw_rect(0, INFO_Y - 2, SCR_W, 34, 0xFF2A1A12);
+        draw_vgrad(0, INFO_Y - 4, SCR_W, 36, 0xF0281A10, 0xF0140C08);
         intraFontSetStyle(g_font, 0.68f, C_TEXT, 0, 0.0f, 0);
         intraFontPrintColumn(g_font, 10, INFO_Y + 11, SCR_W - 20, cur->title);
         intraFontSetStyle(g_font, 0.52f, C_DIM, 0, 0.0f, 0);
@@ -811,20 +989,27 @@ static void start_track(int index)
     if (index < 0 || index >= g_track_count)
         return;
     g_playing_index = index;
-    player_start(g_tracks[index].video_id);
+    player_start(g_tracks[index].video_id, g_tracks[index].duration_sec);
 }
 
 static Screen screen_playlist_tick(void)
 {
-    if ((g_pressed & PSP_CTRL_UP) && g_track_sel > 0)
+    if ((g_pressed & PSP_CTRL_UP) && g_track_sel > 0) {
         g_track_sel--;
-    if ((g_pressed & PSP_CTRL_DOWN) && g_track_sel < g_track_count - 1)
+        snd_play(SND_MOVE);
+    }
+    if ((g_pressed & PSP_CTRL_DOWN) && g_track_sel < g_track_count - 1) {
         g_track_sel++;
+        snd_play(SND_MOVE);
+    }
     scroll_to(g_track_sel, &g_track_scroll);
 
-    if (g_pressed & PSP_CTRL_CROSS)
+    if (g_pressed & PSP_CTRL_CROSS) {
+        snd_play(SND_CANCEL);
         return SCR_HOME;
+    }
     if ((g_pressed & PSP_CTRL_CIRCLE) && g_track_count > 0) {
+        snd_play(SND_OK);
         start_track(g_track_sel);
         return SCR_PLAYER;
     }
@@ -835,17 +1020,21 @@ static Screen screen_playlist_tick(void)
     for (int i = g_track_scroll;
          i < g_track_count && i < g_track_scroll + LIST_ROWS; i++) {
         ApiTrack *t = &g_tracks[i];
-        if (i == g_track_sel)
-            draw_rect(0, y + 1, SCR_W, ROW_H - 1, C_SEL_BG);
+        if (i == g_track_sel) {
+            draw_vgrad(0, y, SCR_W, ROW_H, 0xE0402818, 0xE0281810);
+            draw_rect(0, y, 3, ROW_H, C_ACCENT);   /* 左端のアクセント */
+        }
+        art_draw(t->video_id, 8, y + 2, ROW_H - 4);
         char line[200];
         snprintf(line, sizeof(line), "%s%s",
-                 (i == g_playing_index) ? "> " : "", t->title);
-        text(10, y + 13, (i == g_track_sel) ? C_TEXT : C_DIM, 0.8f, line);
+                 (i == g_playing_index) ? "♪ " : "", t->title);
+        text(30, y + 13, (i == g_track_sel) ? C_TEXT : C_DIM,
+             (i == g_track_sel) ? 0.72f : 0.65f, line);
         if (t->duration_sec > 0) {
             char dur[16];
             snprintf(dur, sizeof(dur), "%d:%02d",
                      t->duration_sec / 60, t->duration_sec % 60);
-            text(SCR_W - 44, y + 13, C_DIM, 0.7f, dur);
+            text(SCR_W - 42, y + 13, C_DIM, 0.6f, dur);
         }
         y += ROW_H;
     }
@@ -866,14 +1055,22 @@ static Screen screen_player_tick(void)
             player_stop();
     }
 
-    if (g_pressed & PSP_CTRL_CROSS)
+    if (g_pressed & PSP_CTRL_CROSS) {
+        snd_play(SND_CANCEL);
         return SCR_PLAYLIST;
-    if (g_pressed & PSP_CTRL_TRIANGLE)
+    }
+    if (g_pressed & PSP_CTRL_TRIANGLE) {
+        snd_play(SND_OK);
         player_toggle_pause();
-    if ((g_pressed & PSP_CTRL_LTRIGGER) && g_playing_index > 0)
+    }
+    if ((g_pressed & PSP_CTRL_LTRIGGER) && g_playing_index > 0) {
+        snd_play(SND_MOVE);
         start_track(g_playing_index - 1);
-    if ((g_pressed & PSP_CTRL_RTRIGGER) && g_playing_index + 1 < g_track_count)
+    }
+    if ((g_pressed & PSP_CTRL_RTRIGGER) && g_playing_index + 1 < g_track_count) {
+        snd_play(SND_MOVE);
         start_track(g_playing_index + 1);
+    }
 
     ApiTrack *t = (g_playing_index >= 0) ? &g_tracks[g_playing_index] : NULL;
 
@@ -881,25 +1078,27 @@ static Screen screen_player_tick(void)
     draw_chrome("再生中",
                 "△: 一時停止    L/R: 前後の曲    ×: 一覧へ");
     if (t) {
-        /* 左に大きなアートワーク、右に曲情報 (PC 版の再生画面と同じ構成) */
-        art_draw(t->video_id, 20, 48, 96);
+        /* 左に大きなアートワーク (影+白枠)、右に曲情報 */
+        draw_rect(26, 54, 128, 128, 0xA0000000);
+        draw_rect(19, 47, 130, 130, 0x50FFFFFF);
+        art_draw(t->video_id, 20, 48, 128);
 
-        const int tx = 132;
-        intraFontSetStyle(g_font, 0.85f, C_TEXT, 0, 0.0f, 0);
-        intraFontPrintColumn(g_font, tx, 66, SCR_W - tx - 16, t->title);
+        const int tx = 168;
+        intraFontSetStyle(g_font, 0.88f, C_TEXT, 0, 0.0f, 0);
+        intraFontPrintColumn(g_font, tx, 70, SCR_W - tx - 16, t->title);
         intraFontSetStyle(g_font, 0.62f, C_DIM, 0, 0.0f, 0);
-        intraFontPrintColumn(g_font, tx, 100, SCR_W - tx - 16, t->artist);
+        intraFontPrintColumn(g_font, tx, 104, SCR_W - tx - 16, t->artist);
 
         const char *st_label =
             (st == PLAYER_BUFFERING) ? "バッファリング中..." :
             (st == PLAYER_PAUSED)    ? "一時停止" :
             (st == PLAYER_ERROR)     ? "エラー" :
             (st == PLAYER_PLAYING)   ? "再生中" : "";
-        text(132, 128, (st == PLAYER_ERROR) ? C_ACCENT : C_HEADER, 0.65f, st_label);
+        text(168, 132, (st == PLAYER_ERROR) ? C_ACCENT : C_HEADER, 0.62f, st_label);
         if (st == PLAYER_ERROR) {
             char e[64];
             snprintf(e, sizeof(e), "code: 0x%08X", player_last_error());
-            text(132, 148, C_DIM, 0.6f, e);
+            text(168, 152, C_DIM, 0.6f, e);
         }
 
         /* 進捗バー */
@@ -911,8 +1110,9 @@ static Screen screen_player_tick(void)
                      t->duration_sec / 60, t->duration_sec % 60);
             int w = (SCR_W - 48) * elapsed / t->duration_sec;
             if (w > SCR_W - 48) w = SCR_W - 48;
-            draw_rect(24, 200, SCR_W - 48, 6, 0xFF404040);
-            draw_rect(24, 200, w, 6, C_ACCENT);
+            draw_vgrad(24, 200, SCR_W - 48, 7, 0xFF4A3A30, 0xFF2A2018);
+            draw_vgrad(24, 200, w, 7, 0xFF3030FF, 0xFF0000C8);
+            draw_rect(24 + w - 3, 197, 7, 13, 0xFFFFFFFF);   /* つまみ */
         } else {
             snprintf(tm, sizeof(tm), "%d:%02d", elapsed / 60, elapsed % 60);
         }
@@ -938,19 +1138,30 @@ int main(void)
     sceCtrlSetSamplingMode(PSP_CTRL_MODE_DIGITAL);
 
     gu_init();
+    make_ui_textures();
     if (font_init() < 0) {
         sceKernelExitGame();
         return 0;
     }
     player_global_init();
     art_init();
+    snd_init();
 
     Screen scr = SCR_CONNECT;
     while (g_running) {
+        g_frame++;
         g_demo_screen = (int)scr;
         input_update();
         if (g_pressed & PSP_CTRL_START)
             break;
+
+        /* 曲が終わったら、どの画面にいても自動で次の曲へ進む */
+        if (player_state() == PLAYER_FINISHED && g_playing_index >= 0) {
+            if (g_playing_index + 1 < g_track_count)
+                start_track(g_playing_index + 1);
+            else
+                player_stop();
+        }
 
         Screen before = scr;
 
@@ -982,6 +1193,7 @@ int main(void)
     login_cancel();
     player_stop();
     art_shutdown();
+    snd_shutdown();
     intraFontUnload(g_font);
     if (g_font_jpn)
         intraFontUnload(g_font_jpn);

@@ -13,8 +13,9 @@ typedef enum {
 /* 起動時に1回。AVモジュールのロードと sceMp3InitResource。0=成功 */
 int player_global_init(void);
 
-/* video_id のストリーム再生を開始 (既存の再生は停止される)。0=成功 */
-int player_start(const char *video_id);
+/* video_id のストリーム再生を開始 (既存の再生は停止される)。0=成功
+   duration_hint_sec は終端検知の補助 (不明なら 0) */
+int player_start(const char *video_id, int duration_hint_sec);
 
 void player_stop(void);
 void player_toggle_pause(void);

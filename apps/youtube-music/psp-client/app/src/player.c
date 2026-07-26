@@ -26,6 +26,7 @@ static volatile int g_frames = 0;
 static volatile int g_last_error = 0;
 
 static char g_video_id[24];
+static volatile int g_duration_hint = 0;   /* 曲の長さ (秒)。0 = 不明 */
 static SceUID g_thread = -1;
 
 static int decode_thread(SceSize args, void *argp);
@@ -52,11 +53,12 @@ void player_stop(void)
     g_state = PLAYER_STOPPED;
 }
 
-int player_start(const char *video_id)
+int player_start(const char *video_id, int duration_hint_sec)
 {
     player_stop();
 
     snprintf(g_video_id, sizeof(g_video_id), "%s", video_id);
+    g_duration_hint = duration_hint_sec;
     g_cmd_stop = 0;
     g_paused = 0;
     g_frames = 0;
@@ -184,6 +186,24 @@ static int decode_thread(SceSize args, void *argp)
             continue;
         }
         stall = 0;
+
+        /*
+         * 終端検知。
+         * PPSSPP の sceMp3Decode はストリームのデータが尽きた後も
+         * 正常値を返し続けることがあり (バッファを繰り返しデコードする)、
+         * 「4:47 の曲が 10:45 まで再生中」という状態になる。
+         * 受信済みバイト数から期待フレーム数を計算し、
+         * それを超えたら曲が終わったとみなす。
+         * (128kbps CBR: 1 フレーム = 417.96 バイト)
+         */
+        if (eos) {
+            int expected = (int)(total_rx / 417u) + 4;
+            if (g_frames >= expected)
+                break;
+            if (g_duration_hint > 0 &&
+                player_elapsed_sec() >= g_duration_hint + 2)
+                break;
+        }
 
         int nsamples = bytes / 4;
         if (!src_reserved) {

@@ -194,6 +194,15 @@ def art_pixels(item_id: str, size: int) -> bytes:
     res.raise_for_status()
     img = Image.open(io.BytesIO(res.content)).convert("RGBA")
     img = img.resize((size, size), Image.LANCZOS)
+
+    # 角丸 (PC 版 YouTube Music のカードと同じ見た目)。
+    # 角のアルファを 0 にして送ると、PSP 側はブレンドだけで角丸になる
+    from PIL import ImageDraw
+    mask = Image.new("L", (size, size), 0)
+    ImageDraw.Draw(mask).rounded_rectangle(
+        [0, 0, size - 1, size - 1], radius=max(3, size // 8), fill=255)
+    img.putalpha(mask)
+
     data = img.tobytes()   # R,G,B,A の並び = PSP の GU_PSM_8888 と同じ
 
     with _art_lock:
