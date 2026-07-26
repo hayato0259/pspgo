@@ -1,19 +1,24 @@
 /*
  * PSP Go YouTube Music クライアント
  *
- * 画面遷移: 接続 → ホーム (プレイリスト一覧) → プレイリスト (曲一覧) → 再生
- * 操作: 上下=移動 / ○=決定 / ×=戻る / △=一時停止 / L,R=前後の曲 / START=終了
+ * 画面遷移: 接続 → ログイン選択 → ログイン(QR) → ホーム → プレイリスト → 再生
+ * 操作: 上下=移動 / ○=決定 / ×=戻る / △=一時停止 / L,R=前後の曲
+ *       SELECT=ログイン・ログアウト / START=終了
  *
- * 「ログイン」はサーバー側の browser.json で行われ、
- * この画面ではその認証状態とアカウント名を表示する (接続画面)。
+ * ログインは OAuth デバイスコードフロー。Google との通信はサーバーが行い、
+ * このアプリは QR コードと入力コードを表示して承認完了を待つだけ。
  */
 #include <pspkernel.h>
 #include <pspdisplay.h>
 #include <pspctrl.h>
 #include <pspgu.h>
+#include <pspge.h>
 #include <intraFont.h>
 #include <string.h>
 #include <stdio.h>
+#ifdef SHOTDUMP
+#include <pspdisplay.h>
+#endif
 #include "common.h"
 #include "net.h"
 #include "api.h"
@@ -67,11 +72,25 @@ static void setup_callbacks(void)
 static unsigned int __attribute__((aligned(16))) g_gu_list[262144];
 static intraFont *g_font = NULL, *g_font_jpn = NULL;
 
+#ifdef SHOTDUMP
+/* 目視確認用のオフスクリーン描画先 (メインメモリ) */
+static unsigned int __attribute__((aligned(64))) g_sysfb[512 * SCR_H];
+#endif
+
 static void gu_init(void)
 {
     sceGuInit();
     sceGuStart(GU_DIRECT, g_gu_list);
+#ifdef SHOTDUMP
+    /*
+     * ダンプ用ビルドでは描画先をメインメモリ上の配列にする。
+     * VRAM は GPU 側の都合で CPU から読んだ内容が最新とは限らないが、
+     * メインメモリなら描画結果をそのまま読み出せる。
+     */
+    sceGuDrawBuffer(GU_PSM_8888, g_sysfb, 512);
+#else
     sceGuDrawBuffer(GU_PSM_8888, (void *)0, 512);
+#endif
     sceGuDispBuffer(SCR_W, SCR_H, (void *)0x88000, 512);
     sceGuDepthBuffer((void *)0x110000, 512);
     sceGuOffset(2048 - (SCR_W / 2), 2048 - (SCR_H / 2));
@@ -94,9 +113,15 @@ static void gu_init(void)
  * PPSSPP は flash0 が仮想FSで intraFont から開けないことがあるため、
  * アプリ同梱パス (相対) もフォールバックとして試す。
  * ※同梱フォントはリポジトリにコミットしない (著作物)。README 参照。
+ *
+ * 重要: 日本語フォント (jpn0.pgf) を「主フォント」にする。
+ * ラテンフォントを主にして altFont で日本語へ逃がす構成だと、
+ * 連続する日本語文字が 1 文字目以降描画されない
+ * (intraFont の代替フォント切り替えの問題)。
+ * jpn0.pgf は ASCII も含むため、これ 1 本で日本語と英数字を両方描ける。
  */
-static const char *FONT_LTN[] = { "flash0:/font/ltn8.pgf", "font/ltn8.pgf", NULL };
 static const char *FONT_JPN[] = { "flash0:/font/jpn0.pgf", "font/jpn0.pgf", NULL };
+static const char *FONT_LTN[] = { "flash0:/font/ltn8.pgf", "font/ltn8.pgf", NULL };
 
 static intraFont *load_first(const char **paths)
 {
@@ -112,12 +137,11 @@ static int font_init(void)
 {
     if (intraFontInit() < 0)
         return -1;
-    g_font = load_first(FONT_LTN);
-    g_font_jpn = load_first(FONT_JPN);
-    if (!g_font)
-        return -2;
-    if (g_font_jpn) {
-        intraFontSetAltFont(g_font, g_font_jpn); /* 日本語グリフはこちらへフォールバック */
+
+    g_font = load_first(FONT_JPN);       /* 日本語フォントを主に使う */
+    if (!g_font) {
+        g_font = load_first(FONT_LTN);   /* 日本語フォントが無い環境向けの保険 */
+        return g_font ? 0 : -2;
     }
     return 0;
 }
@@ -130,15 +154,46 @@ static void frame_begin(void)
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
 }
 
+#ifdef SHOTDUMP
+/*
+ * 開発時の目視確認用。
+ * ダブルバッファのどちらに描いたかを自分で追跡し、スワップ前に
+ * 「今描き終えたバッファ」を raw で書き出す。表示中バッファを
+ * 後から読む方法では、どちらを掴んだか確定できず古いフレームが出てしまう。
+ */
+static char g_dump_req[32] = "";      /* 次の frame_end で書き出すファイル名 */
+
+static void dump_drawn_buffer(void)
+{
+    /* GPU が書いた内容を読むため、CPU キャッシュを捨ててから読む */
+    sceKernelDcacheInvalidateRange(g_sysfb, sizeof(g_sysfb));
+    FILE *fp = fopen(g_dump_req, "wb");
+    if (!fp)
+        return;
+    fwrite(g_sysfb, 4, (size_t)512 * SCR_H, fp);
+    fclose(fp);
+}
+#endif
+
 static void frame_end(void)
 {
     sceGuFinish();
     sceGuSync(0, 0);
+#ifdef SHOTDUMP
+    if (g_dump_req[0]) {
+        dump_drawn_buffer();
+        g_dump_req[0] = '\0';
+    }
+#endif
     sceDisplayWaitVblankStart();
-    sceGuSwapBuffers();
+#ifndef SHOTDUMP
+    sceGuSwapBuffers();   /* ダンプ用ビルドは常に同じオフスクリーンへ描く */
+#endif
 }
 
 typedef struct { unsigned int color; short x, y, z; } RectVtx;
+
+static void draw_rect(int x, int y, int w, int h, unsigned int color);
 
 static void draw_rect(int x, int y, int w, int h, unsigned int color)
 {
@@ -157,10 +212,49 @@ static void text(float x, float y, unsigned int color, float size, const char *s
     intraFontPrint(g_font, x, y, s);
 }
 
+/*
+ * QR コードを描画する。サーバーから受け取ったモジュール配列 (1バイト1マス) を、
+ * 黒マスだけスプライトとして一括描画する。画像デコーダは不要。
+ */
+static void draw_qr(const unsigned char *qr, int size, int x, int y, int scale)
+{
+    int quiet = 2 * scale;                 /* QR に必要な余白 */
+    int side = size * scale;
+
+    /* 余白を含めた白地 */
+    draw_rect(x - quiet, y - quiet, side + quiet * 2, side + quiet * 2, 0xFFFFFFFF);
+
+    /* 黒マスを数える (頂点バッファのサイズ決定用) */
+    int dark = 0;
+    for (int i = 0; i < size * size; i++)
+        if (qr[i])
+            dark++;
+    if (dark == 0)
+        return;
+
+    RectVtx *v = sceGuGetMemory(2 * dark * sizeof(RectVtx));
+    int n = 0;
+    for (int row = 0; row < size; row++) {
+        for (int col = 0; col < size; col++) {
+            if (!qr[row * size + col])
+                continue;
+            short px = (short)(x + col * scale);
+            short py = (short)(y + row * scale);
+            v[n].color = 0xFF000000; v[n].x = px;         v[n].y = py;         v[n].z = 0; n++;
+            v[n].color = 0xFF000000; v[n].x = px + scale; v[n].y = py + scale; v[n].z = 0; n++;
+        }
+    }
+    sceGuDisable(GU_TEXTURE_2D);
+    sceGuDrawArray(GU_SPRITES,
+                   GU_COLOR_8888 | GU_VERTEX_16BIT | GU_TRANSFORM_2D, n, 0, v);
+    sceGuEnable(GU_TEXTURE_2D);
+}
+
 /* --- 入力 (エッジ検出) --- */
 static unsigned int g_prev_buttons = 0;
 static unsigned int g_pressed = 0;
 static int g_repeat_timer = 0;
+static int g_demo_screen = -1;  /* AUTODEMO / SHOTDUMP が参照する現在の画面 */
 
 static void input_update(void)
 {
@@ -180,12 +274,21 @@ static void input_update(void)
     g_prev_buttons = now;
 
 #ifdef AUTODEMO
-    /* E2E 自動検証用: ホーム表示後に自動でプレイリストを開いて再生する */
+    /*
+     * E2E 自動検証用: 同じ画面に一定時間留まったら ○ を1回だけ自動入力し、
+     * 画面遷移を自動で辿る (ログイン → ホーム → プレイリスト → 再生)。
+     */
     {
-        static int demo_frame = 0;
-        demo_frame++;
-        if (demo_frame == 300 || demo_frame == 600)
+        static int prev_scr = -1, held = 0, fired = 0;
+        if (g_demo_screen != prev_scr) {
+            prev_scr = g_demo_screen;
+            held = 0;
+            fired = 0;
+        }
+        if (++held > 260 && !fired) {
+            fired = 1;
             g_pressed |= PSP_CTRL_CIRCLE;
+        }
     }
 #endif
 }
@@ -272,16 +375,16 @@ static Screen screen_connect_tick(void)
 
     if (step == 99) { /* エラー表示で停止 */
         frame_begin();
-        draw_chrome("YouTube Music for PSP", "START = exit");
+        draw_chrome("YouTube Music for PSP", "START: 終了");
         text(30, 120, C_ACCENT, 0.8f, g_error);
         frame_end();
         return SCR_CONNECT;
     }
 
     frame_begin();
-    draw_chrome("YouTube Music for PSP", "setsuzoku-chuu...");
-    text(SCR_W / 2 - 60, 120, C_TEXT, 0.9f, "Connecting...");
-    text(SCR_W / 2 - 110, 145, C_DIM, 0.7f, "server: " SERVER_HOST);
+    draw_chrome("YouTube Music for PSP", "接続中...");
+    text(SCR_W / 2 - 60, 120, C_TEXT, 0.9f, "サーバーに接続しています...");
+    text(SCR_W / 2 - 110, 145, C_DIM, 0.7f, "接続先: " SERVER_HOST);
     frame_end();
 
     if (step == 0) {
@@ -334,12 +437,12 @@ static Screen screen_welcome_tick(void)
     }
 
     frame_begin();
-    draw_chrome("YouTube Music for PSP", "^v: sentaku  O: kettei");
-    text(40, 70, C_TEXT, 0.9f, "Google account de login shimasu ka?");
+    draw_chrome("YouTube Music for PSP", "上下: 選択    ○: 決定");
+    text(40, 70, C_TEXT, 0.9f, "Google アカウントでログインしますか?");
     text(40, 92, C_DIM, 0.7f,
-         "login suru to My Mix nado ga hyouji saremasu.");
+         "ログインすると、マイミックスなどが表示されます。");
 
-    const char *opts[2] = { "Login suru", "Login shinaide tsukau" };
+    const char *opts[2] = { "ログインする", "ログインせずに使う" };
     for (int i = 0; i < 2; i++) {
         int y = 130 + i * 30;
         if (i == g_welcome_sel)
@@ -347,9 +450,9 @@ static Screen screen_welcome_tick(void)
         text(44, y + 2, (i == g_welcome_sel) ? C_TEXT : C_DIM, 0.85f, opts[i]);
     }
     text(40, 215, C_DIM, 0.65f,
-         "login wa TV app to onaji houshiki desu:");
+         "テレビの YouTube アプリと同じ方式です。");
     text(40, 233, C_DIM, 0.65f,
-         "gamen no code wo sumaho ya PC de nyuuryoku shimasu.");
+         "画面の QR コードをスマートフォンで読み取ります。");
     frame_end();
     return SCR_WELCOME;
 }
@@ -379,29 +482,48 @@ static Screen screen_login_tick(void)
     }
 
     frame_begin();
-    draw_chrome("Login", (st == LOGIN_FAILED) ? "O: yarinaosu  X: modoru"
-                                              : "X: chuushi");
+    draw_chrome("ログイン", (st == LOGIN_FAILED) ? "○: やり直す    ×: 戻る"
+                                              : "×: 中止");
 
     if (st == LOGIN_REQUESTING) {
-        text(40, 120, C_TEXT, 0.85f, "code wo shutoku shiteimasu...");
+        text(40, 120, C_TEXT, 0.85f, "ログイン用のコードを取得しています...");
     } else if (st == LOGIN_WAITING) {
-        text(40, 62, C_DIM, 0.75f, "1. sumaho ya PC de kono URL wo hiraku:");
-        text(56, 86, C_HEADER, 0.9f, login_url());
-        text(40, 118, C_DIM, 0.75f, "2. kono code wo nyuuryoku suru:");
+        int qr_size = 0;
+        const unsigned char *qr = login_qr(&qr_size);
 
-        /* コードは大きく、枠付きで表示 */
-        draw_rect(56, 130, SCR_W - 112, 44, 0xFF3A2418);
-        intraFontSetStyle(g_font, 1.7f, C_TEXT, 0, 0.0f, INTRAFONT_ALIGN_CENTER);
-        intraFontPrint(g_font, SCR_W / 2, 162, login_user_code());
+        if (qr) {
+            /* 左に QR、右に手入力用の情報を並べる */
+            int scale = (qr_size <= 25) ? 5 : 4;
+            int side = qr_size * scale;
+            int qx = 34, qy = 60 + (150 - side) / 2;
+            draw_qr(qr, qr_size, qx, qy, scale);
 
-        text(40, 196, C_DIM, 0.75f, "3. shounin go, jidou de susumimasu");
-        char rem[64];
+            text(40, 48, C_TEXT, 0.8f, "スマートフォンで読み取ってください");
+
+            int tx = qx + side + 26;
+            text(tx, 96, C_DIM, 0.65f, "読み取れない場合:");
+            text(tx, 118, C_HEADER, 0.7f, login_url());
+            text(tx, 142, C_DIM, 0.65f, "に、このコードを入力");
+            intraFontSetStyle(g_font, 1.2f, C_TEXT, 0, 0.0f, 0);
+            intraFontPrint(g_font, tx, 172, login_user_code());
+        } else {
+            /* QR が使えない場合はコードを大きく見せる */
+            text(40, 62, C_DIM, 0.75f, "スマートフォンや PC で次の URL を開いてください");
+            text(56, 86, C_HEADER, 0.9f, login_url());
+            text(40, 118, C_DIM, 0.75f, "そこに、このコードを入力してください:");
+            draw_rect(56, 130, SCR_W - 112, 44, 0xFF3A2418);
+            intraFontSetStyle(g_font, 1.7f, C_TEXT, 0, 0.0f, INTRAFONT_ALIGN_CENTER);
+            intraFontPrint(g_font, SCR_W / 2, 162, login_user_code());
+        }
+
+        text(40, 216, C_DIM, 0.7f, "承認すると自動で次に進みます");
+        char rem[96];
         int r = login_remaining_sec();
-        snprintf(rem, sizeof(rem), "machi... (code yuukou: %d:%02d)",
+        snprintf(rem, sizeof(rem), "承認をお待ちしています  (コード有効: %d:%02d)",
                  r / 60, r % 60);
-        text(40, 222, C_HEADER, 0.7f, rem);
+        text(40, 238, C_HEADER, 0.7f, rem);
     } else if (st == LOGIN_FAILED) {
-        text(40, 110, C_ACCENT, 0.85f, "login shippai");
+        text(40, 110, C_ACCENT, 0.85f, "ログインに失敗しました");
         intraFontSetStyle(g_font, 0.7f, C_DIM, 0, 0.0f, 0);
         intraFontPrintColumn(g_font, 40, 138, SCR_W - 80, login_message());
     }
@@ -468,11 +590,11 @@ static Screen screen_home_tick(void)
     }
 
     /* ログイン不可 (サーバーに OAuth クライアント未設定) なら案内を出さない */
-    const char *hint = g_auth      ? "O: hiraku  SELECT: logout  START: exit"
-                     : g_can_login ? "O: hiraku  SELECT: login  START: exit"
-                                   : "O: hiraku  START: exit";
+    const char *hint = g_auth      ? "○: 開く    SELECT: ログアウト    START: 終了"
+                     : g_can_login ? "○: 開く    SELECT: ログイン    START: 終了"
+                                   : "○: 開く    START: 終了";
     frame_begin();
-    draw_chrome(g_auth ? "Home" : "Home (mi-login)", hint);
+    draw_chrome(g_auth ? "ホーム" : "ホーム (未ログイン)", hint);
     int y = LIST_TOP;
     for (int i = g_home_scroll;
          i < g_home_count && i < g_home_scroll + LIST_ROWS; i++) {
@@ -515,7 +637,7 @@ static Screen screen_playlist_tick(void)
     }
 
     frame_begin();
-    draw_chrome(g_pl_title, "^v: sentaku  O: saisei  X: modoru");
+    draw_chrome(g_pl_title, "上下: 選択    ○: 再生    ×: 戻る");
     int y = LIST_TOP;
     for (int i = g_track_scroll;
          i < g_track_count && i < g_track_scroll + LIST_ROWS; i++) {
@@ -563,18 +685,18 @@ static Screen screen_player_tick(void)
     ApiTrack *t = (g_playing_index >= 0) ? &g_tracks[g_playing_index] : NULL;
 
     frame_begin();
-    draw_chrome("Now Playing",
-                "^: pause  L/R: mae/tsugi  X: ichiran e");
+    draw_chrome("再生中",
+                "△: 一時停止    L/R: 前後の曲    ×: 一覧へ");
     if (t) {
         intraFontSetStyle(g_font, 1.1f, C_TEXT, 0, 0.0f, 0);
         intraFontPrintColumn(g_font, 24, 90, SCR_W - 48, t->title);
         text(24, 120, C_DIM, 0.85f, t->artist);
 
         const char *st_label =
-            (st == PLAYER_BUFFERING) ? "Buffering..." :
-            (st == PLAYER_PAUSED)    ? "Paused" :
-            (st == PLAYER_ERROR)     ? "Error" :
-            (st == PLAYER_PLAYING)   ? "Playing" : "";
+            (st == PLAYER_BUFFERING) ? "バッファリング中..." :
+            (st == PLAYER_PAUSED)    ? "一時停止" :
+            (st == PLAYER_ERROR)     ? "エラー" :
+            (st == PLAYER_PLAYING)   ? "再生中" : "";
         text(24, 150, (st == PLAYER_ERROR) ? C_ACCENT : C_HEADER, 0.8f, st_label);
         if (st == PLAYER_ERROR) {
             char e[64];
@@ -600,12 +722,12 @@ static Screen screen_player_tick(void)
 
         if (g_playing_index + 1 < g_track_count) {
             char next[160];
-            snprintf(next, sizeof(next), "tsugi: %s",
+            snprintf(next, sizeof(next), "次の曲: %s",
                      g_tracks[g_playing_index + 1].title);
             text(24, 244, C_DIM, 0.7f, next);
         }
     } else {
-        text(24, 120, C_DIM, 0.9f, "(saisei shiteimasen)");
+        text(24, 120, C_DIM, 0.9f, "(再生していません)");
     }
     frame_end();
     return SCR_PLAYER;
@@ -626,9 +748,25 @@ int main(void)
 
     Screen scr = SCR_CONNECT;
     while (g_running) {
+        g_demo_screen = (int)scr;
         input_update();
         if (g_pressed & PSP_CTRL_START)
             break;
+
+        Screen before = scr;
+
+#ifdef SHOTDUMP
+        /* 画面ごとに1枚だけ、内容が落ち着いたところで書き出しを予約する */
+        {
+            static int prev = -1, held = 0, done[8] = {0};
+            if ((int)scr != prev) { prev = (int)scr; held = 0; }
+            held++;
+            if (held > 180 && !done[(int)scr]) {
+                done[(int)scr] = 1;
+                snprintf(g_dump_req, sizeof(g_dump_req), "shot_%d.raw", (int)scr);
+            }
+        }
+#endif
 
         switch (scr) {
         case SCR_CONNECT:  scr = screen_connect_tick();  break;
@@ -638,6 +776,8 @@ int main(void)
         case SCR_PLAYLIST: scr = screen_playlist_tick(); break;
         case SCR_PLAYER:   scr = screen_player_tick();   break;
         }
+
+        (void)before;
     }
 
     login_cancel();

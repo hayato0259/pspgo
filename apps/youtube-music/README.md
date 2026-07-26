@@ -37,9 +37,13 @@ PSP は「HTTP GET + ハードウェア MP3 デコード」だけを行う。
 **Google 公式の OAuth デバイスコードフロー**（テレビやゲーム機の YouTube アプリと同じ方式）を使う。
 
 1. アプリでログインを選ぶ
-2. 画面に入力コードと URL が表示される
-3. 手元のスマートフォンや PC でその URL を開き、コードを入力して承認する
+2. **画面に QR コードが表示される**
+3. スマートフォンで読み取ると、コードが入力済みの承認ページが開く。承認する
 4. アプリが自動で承認を検知し、マイミックス等が並ぶホームへ進む
+
+QR が読み取れない場合に備えて、URL と入力コードも同じ画面に併記している。
+QR コードはサーバーが白黒マスの配列として送り、PSP 側はそれを四角形として
+描くだけなので、画像デコーダを持たずに表示できる。
 
 PSP 自体では現代の TLS も JavaScript も扱えないため、Google との通信とトークンの保管は
 サーバーが担う。PSP 側の役割はコードの表示と承認完了のポーリングのみ。
@@ -77,17 +81,21 @@ Google Cloud からダウンロードした JSON（`installed` でネストし�
 
 ## 使用ライブラリ
 
-- **PSP 側**: intraFont（PSP 内蔵 PGF フォント描画。日本語表示可）/ sceGu（描画）/
+- **PSP 側**: intraFont（PSP 内蔵 PGF フォント描画。UI は日本語表示）/ sceGu（描画）/
   sceMp3 + sceAudio（Media Engine でのハードウェア MP3 デコード）/ sceNetInet（生ソケット）
   - **JSON パーサは使わない**。サーバーがタブ区切りテキスト（TSV）を返すことで、
     PSP 側の解析を最小限に抑えている
-- **サーバー側**: ytmusicapi（メタデータ）/ yt-dlp（音声取得）/ ffmpeg（MP3 変換）
+  - **フォントは jpn0.pgf を主フォントにする**。ltn8.pgf を主にして代替フォントで
+    日本語へ逃がす構成では、連続する日本語文字が 1 文字目以降描画されない
+    （検証ツール: `psp-client/fontcheck/`）
+- **サーバー側**: ytmusicapi（メタデータ）/ yt-dlp（音声取得）/ ffmpeg（MP3 変換）/
+  qrcode（ログイン用 QR。未インストールでもコード入力で動く）
 
 ## サーバーの起動
 
 ```bash
 cd server
-python3 -m venv .venv && ./.venv/bin/pip install ytmusicapi
+python3 -m venv .venv && ./.venv/bin/pip install ytmusicapi qrcode
 ./.venv/bin/python app.py 8080
 ```
 
@@ -140,7 +148,12 @@ cp EBOOT.PBP ~/.config/ppsspp/PSP/GAME/YTMUSIC/
 ## 検証済みの状態
 
 - PPSSPP 上で 接続 → ホーム → プレイリスト → 再生 の全経路が動作
-- 連続再生の安定性: 10 秒あたり 384 デコードフレーム（理論値 380）で実時間ちょうど
+- 連続再生の安定性: 10 秒あたり 383 デコードフレーム（理論値 380）で実時間ちょうど
+- ログイン: モック（`tests/mock_google_oauth.py`）で
+  コード取得 → 承認待ち → 承認 → トークン保存 → ホーム再取得までを確認
+- **未確認**: 画面の見た目。PPSSPP はフレームバッファを CPU から読み出せないため、
+  日本語表示や QR コードが意図通りに描かれているかは実機でしか確認できない
+  （文字送り幅は `psp-client/fontcheck/` で数値検証済み）
 - 実機（PSP Go + CFW）での動作確認は未実施
 
 ## 注意

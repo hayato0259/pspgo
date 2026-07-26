@@ -103,6 +103,29 @@ _login = {"device_code": None, "expires_at": 0}
 _login_lock = threading.Lock()
 
 
+def qr_line(url: str) -> str:
+    """QR コードを 1 行の TSV で返す: qr\t<辺のモジュール数>\t<0/1 の羅列>
+
+    PSP 側に画像デコーダを持たせないため、白黒モジュールをそのまま送る。
+    qrcode パッケージが無ければ空文字を返す (アプリはコード入力のみで動く)。
+    """
+    try:
+        import qrcode
+    except ImportError:
+        return ""
+    qr = qrcode.QRCode(
+        error_correction=qrcode.constants.ERROR_CORRECT_L, box_size=1, border=0
+    )
+    qr.add_data(url)
+    qr.make(fit=True)
+    matrix = qr.get_matrix()
+    size = len(matrix)
+    if size > 64:  # PSP 側のバッファ上限
+        return ""
+    flat = "".join("1" if cell else "0" for row in matrix for cell in row)
+    return f"qr\t{size}\t{flat}\n"
+
+
 def login_start() -> str:
     """Google からデバイスコードを取得し、PSP に見せる情報を返す。"""
     creds = credentials()
@@ -110,11 +133,17 @@ def login_start() -> str:
     with _login_lock:
         _login["device_code"] = code["device_code"]
         _login["expires_at"] = time.time() + int(code.get("expires_in", 1800))
+
+    # user_code を付けた URL にしておくと、QR から開いた時点でコードが入力済みになる
+    verify_url = code["verification_url"]
+    deep_url = f"{verify_url}?user_code={code['user_code']}"
+
     return (
         f"code\t{clean(code['user_code'])}\n"
-        f"url\t{clean(code['verification_url'])}\n"
+        f"url\t{clean(verify_url)}\n"
         f"interval\t{int(code.get('interval', 5))}\n"
         f"expires\t{int(code.get('expires_in', 1800))}\n"
+        + qr_line(deep_url)
     )
 
 
@@ -301,6 +330,18 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/playlist" and "id" in q:
                 self._text(tsv_playlist(q["id"][0]))
                 return
+        except Exception as e:
+            # 保存済みトークンが失効・無効化されていると Google が 401 を返す。
+            # 生のエラーを出す代わりに再ログインを促す (トークンは消さない)。
+            if TOKEN_FILE.exists() and "401" in str(e):
+                self.log_message("token invalid -> reauth: %r", e)
+                self._text("error\tログインの有効期限が切れました\nreauth\t1\n", code=200)
+                return
+            self.log_message("api error: %r", e)
+            self._text(f"error\t{clean(e)}\n", code=502)
+            return
+
+        try:
             if url.path == "/api/login/start":
                 self._text(login_start())
                 return

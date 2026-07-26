@@ -38,6 +38,17 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
 
 ## PSP 固有の地雷（検証で踏んだもの）
 
+- **日本語表示は jpn0.pgf を「主フォント」にする。**
+  ltn8.pgf を主にして `intraFontSetAltFont` で日本語へ逃がす構成だと、
+  連続する日本語文字が 1 文字目以降描画されない（実測で確認）。
+  jpn0.pgf は ASCII も含むので、これ 1 本で日英とも描ける
+  （検証ツール: `apps/youtube-music/psp-client/fontcheck/`）
+- **PPSSPP ではフレームバッファを CPU から読めない。**
+  `sceDisplayGetFrameBuf` の返り値を読んでも古いフレームのままで、
+  メインメモリへのオフスクリーン描画も反映されない（ハード/ソフト両レンダラで確認）。
+  画面の目視確認は実機でしかできないため、UI の検証は
+  「幅の実測」など数値で判定できる方法を使う
+
 - **BSD ソケット関数 (socket/connect/recv) を使わない** — 新 NID で PPSSPP 未実装。
   `sceNetInet*` を直接呼ぶ
 - **PPSSPP のソケットは EAGAIN を返す** — recv はリトライラッパー経由で呼ぶ

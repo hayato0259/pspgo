@@ -21,4 +21,8 @@ const char *login_url(void);         /* コードを入力するURL */
 const char *login_message(void);     /* 失敗理由 */
 int login_remaining_sec(void);       /* コードの残り有効時間 */
 
+/* QR コードのモジュール配列 (1バイト1モジュール, 行優先)。
+   QR が無ければ NULL。size には辺のモジュール数が入る。 */
+const unsigned char *login_qr(int *size);
+
 #endif

@@ -24,13 +24,63 @@ static char g_url[96];
 static char g_msg[128];
 
 static SceUID g_thread = -1;
-static char g_buf[4096];
+static char g_buf[8192];
+
+#define QR_MAX 64
+static unsigned char g_qr[QR_MAX * QR_MAX];
+static volatile int g_qr_size = 0;   /* 0 = QR なし */
 
 LoginState login_state(void) { return g_state; }
 const char *login_user_code(void) { return g_code; }
 const char *login_url(void) { return g_url; }
 const char *login_message(void) { return g_msg; }
 int login_remaining_sec(void) { return g_remaining; }
+
+const unsigned char *login_qr(int *size)
+{
+    if (g_qr_size <= 0)
+        return NULL;
+    if (size)
+        *size = g_qr_size;
+    return g_qr;
+}
+
+/* "qr\t<size>\t<0/1の羅列>" 行を読み取って g_qr に展開する */
+static void parse_qr(const char *buf)
+{
+    g_qr_size = 0;
+
+    const char *p = buf;
+    const char *line = NULL;
+    while (p && *p) {
+        if (strncmp(p, "qr\t", 3) == 0) {
+            line = p + 3;
+            break;
+        }
+        p = strchr(p, '\n');
+        if (p)
+            p++;
+    }
+    if (!line)
+        return;
+
+    int size = atoi(line);
+    if (size <= 0 || size > QR_MAX)
+        return;
+
+    const char *bits = strchr(line, '\t');
+    if (!bits)
+        return;
+    bits++;
+
+    int need = size * size;
+    for (int i = 0; i < need; i++) {
+        if (bits[i] != '0' && bits[i] != '1')
+            return; /* 途中で切れている: QR なしとして扱う */
+        g_qr[i] = (bits[i] == '1');
+    }
+    g_qr_size = size;
+}
 
 /* TSV から key の値を取り出す。見つからなければ 0 を返す */
 static int tsv_value(const char *buf, const char *key, char *out, int outsize)
@@ -82,6 +132,8 @@ static int login_thread(SceSize args, void *argp)
         set_failed("code no shutoku ni shippai");
         return 0;
     }
+
+    parse_qr(g_buf);
 
     int interval = 5;
     if (tsv_value(g_buf, "interval", tmp, sizeof(tmp))) {

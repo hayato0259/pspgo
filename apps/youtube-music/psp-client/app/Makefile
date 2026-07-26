@@ -11,6 +11,10 @@ CFLAGS = -O2 -G0 -Wall -DSERVER_HOST=\"$(SERVER_HOST)\" -DSERVER_PORT=$(SERVER_P
 ifdef AUTODEMO
 CFLAGS += -DAUTODEMO
 endif
+# 開発時の目視確認用: 画面ごとにフレームバッファを raw で書き出す
+ifdef SHOTDUMP
+CFLAGS += -DSHOTDUMP
+endif
 CXXFLAGS = $(CFLAGS) -fno-exceptions -fno-rtti
 ASFLAGS = $(CFLAGS)
 
