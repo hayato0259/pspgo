@@ -150,6 +150,54 @@ int api_home(ApiItem *items, int max)
     return ctx.count;
 }
 
+/* UTF-8 はバイト列のまま、URL の非予約文字以外を %XX にする。 */
+static int url_encode(const char *src, char *dst, int dstsize)
+{
+    static const char hex[] = "0123456789ABCDEF";
+    int used = 0;
+
+    while (*src) {
+        unsigned char c = (unsigned char)*src++;
+        int unreserved = (c >= 'A' && c <= 'Z') ||
+                         (c >= 'a' && c <= 'z') ||
+                         (c >= '0' && c <= '9') ||
+                         c == '-' || c == '_' || c == '.' || c == '~';
+        int need = unreserved ? 1 : 3;
+        if (used + need >= dstsize)
+            return -1;
+        if (unreserved) {
+            dst[used++] = (char)c;
+        } else {
+            dst[used++] = '%';
+            dst[used++] = hex[c >> 4];
+            dst[used++] = hex[c & 0x0F];
+        }
+    }
+    dst[used] = '\0';
+    return used;
+}
+
+int api_search(const char *query_utf8, ApiItem *items, int max)
+{
+    char encoded[768];
+    char path[800];
+    if (!query_utf8 || !items || max <= 0)
+        return -1;
+    if (url_encode(query_utf8, encoded, sizeof(encoded)) < 0)
+        return -1;
+    snprintf(path, sizeof(path), "/api/search?q=%s", encoded);
+
+    int len = http_get(net_server_host(), net_server_port(), path,
+                       g_buf, sizeof(g_buf));
+    if (len < 0)
+        return len;
+    if (has_server_error())
+        return API_ERR_SERVER;
+    struct home_ctx ctx = { items, max, 0 };
+    for_each_line(g_buf, 4, home_line, &ctx);
+    return ctx.count;
+}
+
 /* --- /api/playlist ------------------------------------------------------ */
 
 struct pl_ctx {

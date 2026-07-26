@@ -29,6 +29,9 @@ int api_logout(void);
 /* /api/home。戻り値: 件数 / <0 エラー */
 int api_home(ApiItem *items, int max);
 
+/* /api/search?q=。query_utf8 は UTF-8。戻り値: 件数 / <0 エラー */
+int api_search(const char *query_utf8, ApiItem *items, int max);
+
 /* /api/playlist?id=。戻り値: トラック数 / <0 エラー */
 int api_playlist(const char *id, char *title_out, int title_size,
                  ApiTrack *tracks, int max);
