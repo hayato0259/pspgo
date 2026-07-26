@@ -33,6 +33,10 @@ int api_home(ApiItem *items, int max);
 int api_playlist(const char *id, char *title_out, int title_size,
                  ApiTrack *tracks, int max);
 
+/* /api/radio?yt=。戻り値: トラック数 / <0 エラー */
+int api_radio(const char *video_id, char *title_out, int title_size,
+              ApiTrack *tracks, int max);
+
 /* 直近の API 呼び出しがサーバーから返したエラー文。無ければ空文字列。
    サーバーが error 行を返した場合、上記の関数は負値を返す。 */
 const char *api_last_error(void);

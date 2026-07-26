@@ -8,6 +8,7 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
   GET /api/status            認証状態:  auth\t0|1 / name\t<表示名> / can_login\t0|1
   GET /api/home              ホーム:    section\t<題> / playlist\t<id>\t<題>\t<副題> / video\t<id>\t<題>\t<アーティスト>
   GET /api/playlist?id=<id>  内容:      meta\t<題> / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
+  GET /api/radio?yt=<videoId> ラジオ:   meta\tラジオ / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
   GET /api/login/start       ログイン開始: code\t<入力コード> / url\t<URL> / interval\t<秒>
   GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
   GET /api/logout            トークン破棄
@@ -396,6 +397,27 @@ def tsv_playlist(pid: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def tsv_radio(video_id: str) -> str:
+    watch, _ = with_fallback(
+        lambda yt: yt.get_watch_playlist(
+            videoId=video_id, radio=True, limit=50
+        ),
+        "ラジオ取得",
+    )
+    lines = ["meta\tラジオ"]
+
+    for t in watch.get("tracks", [])[:50]:
+        vid = t.get("videoId")
+        if not vid:
+            continue
+        remember_art(vid, t.get("thumbnails"))
+        dur = t.get("duration_seconds") or parse_len(t.get("length") or t.get("duration"))
+        lines.append(
+            f"track\t{clean(vid)}\t{clean(t.get('title'))}\t{clean(artists_of(t))}\t{dur}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def tsv_status() -> str:
     name = "-"
     if is_authed():
@@ -467,6 +489,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if url.path == "/api/playlist" and "id" in q:
                 self._text(tsv_playlist(q["id"][0]))
+                return
+            if url.path == "/api/radio" and "yt" in q:
+                self._text(tsv_radio(q["yt"][0]))
                 return
         except Exception as e:
             # 保存済みトークンが失効・無効化されていると Google が 401 を返す。

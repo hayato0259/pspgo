@@ -187,3 +187,21 @@ int api_playlist(const char *id, char *title_out, int title_size,
     for_each_line(g_buf, 5, pl_line, &ctx);
     return ctx.count;
 }
+
+/* --- /api/radio --------------------------------------------------------- */
+
+int api_radio(const char *video_id, char *title_out, int title_size,
+              ApiTrack *tracks, int max)
+{
+    char path[160];
+    snprintf(path, sizeof(path), "/api/radio?yt=%s", video_id);
+    int len = http_get(net_server_host(), net_server_port(), path, g_buf, sizeof(g_buf));
+    if (len < 0)
+        return len;
+    if (has_server_error())
+        return API_ERR_SERVER;
+    title_out[0] = '\0';
+    struct pl_ctx ctx = { title_out, title_size, tracks, max, 0 };
+    for_each_line(g_buf, 5, pl_line, &ctx);
+    return ctx.count;
+}
