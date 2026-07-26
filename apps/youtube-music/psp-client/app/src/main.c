@@ -12,6 +12,7 @@
  */
 #include <pspkernel.h>
 #include <pspctrl.h>
+#include <pspgu.h>
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -206,6 +207,20 @@ static int load_home(void)
     if (g_section_sel >= g_section_count)
         g_section_sel = 0;
     return 0;
+}
+
+/*
+ * 曲 (kind 'V') だけのセクションは、PC 版の「おすすめ」と同じく
+ * コンパクトな行リスト形式で描く。プレイリストが混ざるものはカルーセル。
+ */
+static int section_compact(const Section *s)
+{
+    if (s->count == 0)
+        return 0;
+    for (int i = 0; i < s->count; i++)
+        if (g_home_items[s->first + i].kind != 'V')
+            return 0;
+    return 1;
 }
 
 /* 現在選択されているカード。無ければ NULL */
@@ -536,8 +551,51 @@ static Screen screen_home_tick(void)
             text(MARGIN, base_y, C_DIM, 0.6f, s->title);
         }
 
-        /* 目標スクロール位置へ滑らかに寄せる (XMB 風の慣性) */
-        int visible = (SCR_W - MARGIN * 2 + CARD_PITCH - 1) / CARD_PITCH;
+        if (section_compact(s)) {
+            /* --- コンパクトな行リスト (PC 版の「おすすめ」形式) --- */
+            const int lrow = 24;      /* 1 行の高さ */
+            const int visrows = 3;    /* 完全に見える行数 */
+            int ltarget = s->cursor - 1;
+            if (ltarget > s->count - visrows) ltarget = s->count - visrows;
+            if (ltarget < 0) ltarget = 0;
+            scrollf[si] += ((float)ltarget - scrollf[si]) * 0.22f;
+            if (scrollf[si] < 0) scrollf[si] = 0;
+
+            int lfirst = (int)scrollf[si];
+            float lfrac = scrollf[si] - (float)lfirst;
+
+            /* 段の領域からはみ出す行はシザーで切る (次の段に被せない) */
+            sceGuScissor(0, base_y + 6, SCR_W, visrows * lrow + 6);
+            for (int r = 0; r <= visrows && lfirst + r < s->count; r++) {
+                int idx = s->first + lfirst + r;
+                if (idx >= g_home_count)
+                    break;
+                ApiItem *it = &g_home_items[idx];
+                int ry = base_y + 10 + (int)(((float)r - lfrac) * lrow);
+                int selrow = active && (lfirst + r) == s->cursor;
+
+                if (selrow) {
+                    draw_rect(MARGIN - 8, ry, SCR_W - (MARGIN - 8) * 2, lrow,
+                              C_SEL_BG);
+                    draw_rect(MARGIN - 8, ry, 3, lrow, C_ACCENT);
+                }
+                art_draw_ex(it->id, MARGIN, ry + 2, lrow - 4,
+                            active ? 0xFFFFFFFF : C_CARD_DIM);
+                text_clipped(MARGIN + 28, ry + 10, SCR_W - MARGIN * 2 - 28,
+                             selrow ? C_TEXT :
+                             (active ? 0xFFDDDDDD : C_DIM), 0.56f, it->title);
+                text_clipped(MARGIN + 28, ry + 20, SCR_W - MARGIN * 2 - 28,
+                             C_DIM, 0.48f, it->subtitle);
+            }
+            sceGuScissor(0, 0, SCR_W, SCR_H);
+            continue;   /* このセクションはカルーセルを描かない */
+        }
+
+        /* --- カルーセル (プレイリストを含むセクション) --- */
+        /* 目標スクロール位置へ滑らかに寄せる (XMB 風の慣性)。
+           visible は「完全に画面へ収まる枚数」。切り上げで数えると
+           終端で最後のカードが右端に隠れてしまう */
+        int visible = (SCR_W - MARGIN * 2 - CARD_SIZE) / CARD_PITCH + 1;
         if (visible < 1) visible = 1;
         int target = s->cursor - visible / 2;
         if (target > s->count - visible) target = s->count - visible;
