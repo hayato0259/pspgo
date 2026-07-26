@@ -2,8 +2,12 @@
  * 再生スレッド: HTTP ストリーム受信 → sceMp3 (Media Engine) → sceAudioSRC。
  * UI スレッドとは volatile なフラグでやり取りする。
  * 構成は poc2-stream で PPSSPP 検証済みのものをスレッド化した形。
+ *
+ * ダウンロード済みの曲 (offline/<id>.mp3) はサーバーではなく
+ * ローカルファイルから読む。供給元が違うだけでデコード経路は同一。
  */
 #include <pspkernel.h>
+#include <pspiofilemgr.h>
 #include <pspaudio.h>
 #include <psputility.h>
 #include <pspmp3.h>
@@ -11,6 +15,7 @@
 #include <stdio.h>
 #include "player.h"
 #include "net.h"
+#include "store.h"
 #include "common.h"
 
 #define MP3_BUF_SIZE  (128 * 1024)
@@ -26,6 +31,7 @@ static volatile int g_frames = 0;
 static volatile int g_last_error = 0;
 
 static char g_video_id[24];
+static char g_file_path[128];              /* ローカル再生時のパス ("" = 配信) */
 static volatile int g_duration_hint = 0;   /* 曲の長さ (秒)。0 = 不明 */
 static SceUID g_thread = -1;
 
@@ -58,6 +64,19 @@ int player_start(const char *video_id, int duration_hint_sec)
     player_stop();
 
     snprintf(g_video_id, sizeof(g_video_id), "%s", video_id);
+
+    /* ダウンロード済みならローカルから再生する (通信量ゼロ・即時開始) */
+    g_file_path[0] = '\0';
+    {
+        char path[128];
+        store_mp3_path(video_id, path, sizeof(path));
+        SceUID fd = sceIoOpen(path, PSP_O_RDONLY, 0);
+        if (fd >= 0) {
+            sceIoClose(fd);
+            snprintf(g_file_path, sizeof(g_file_path), "%s", path);
+        }
+    }
+
     g_duration_hint = duration_hint_sec;
     g_cmd_stop = 0;
     g_paused = 0;
@@ -90,13 +109,15 @@ int player_elapsed_sec(void)
     return (int)((long long)g_frames * 1152 / 44100);
 }
 
-static int fail(int sock, int handle, int src_reserved, int code)
+static int fail(int sock, SceUID fd, int handle, int src_reserved, int code)
 {
     if (src_reserved)
         sceAudioSRCChRelease();
     if (handle >= 0)
         sceMp3ReleaseMp3Handle(handle);
     net_close(sock);
+    if (fd >= 0)
+        sceIoClose(fd);
     g_last_error = code;
     g_state = PLAYER_ERROR;
     return -1;
@@ -104,14 +125,25 @@ static int fail(int sock, int handle, int src_reserved, int code)
 
 static int decode_thread(SceSize args, void *argp)
 {
-    char path[96];
-    snprintf(path, sizeof(path), "/stream?yt=%s", g_video_id);
+    int sock = -1;
+    SceUID fd = -1;
 
-    int sock = http_open_stream(net_server_host(), net_server_port(), path);
-    if (sock < 0) {
-        g_last_error = sock;
-        g_state = PLAYER_ERROR;
-        return 0;
+    if (g_file_path[0]) {
+        fd = sceIoOpen(g_file_path, PSP_O_RDONLY, 0);
+        if (fd < 0) {
+            g_last_error = fd;
+            g_state = PLAYER_ERROR;
+            return 0;
+        }
+    } else {
+        char path[96];
+        snprintf(path, sizeof(path), "/stream?yt=%s", g_video_id);
+        sock = http_open_stream(net_server_host(), net_server_port(), path);
+        if (sock < 0) {
+            g_last_error = sock;
+            g_state = PLAYER_ERROR;
+            return 0;
+        }
     }
 
     SceMp3InitArg init;
@@ -125,7 +157,7 @@ static int decode_thread(SceSize args, void *argp)
 
     int handle = sceMp3ReserveMp3Handle(&init);
     if (handle < 0)
-        return fail(sock, -1, 0, handle);
+        return fail(sock, fd, -1, 0, handle);
 
     int inited = 0;
     int src_reserved = 0;
@@ -144,18 +176,19 @@ static int decode_thread(SceSize args, void *argp)
             SceInt32 towrite, srcpos;
             int rc = sceMp3GetInfoToAddStreamData(handle, &dst, &towrite, &srcpos);
             if (rc < 0)
-                return fail(sock, handle, src_reserved, rc);
+                return fail(sock, fd, handle, src_reserved, rc);
             if (towrite > 0) {
-                int got = net_recv_wait(sock, dst, towrite);
+                int got = (fd >= 0) ? sceIoRead(fd, dst, towrite)
+                                    : net_recv_wait(sock, dst, towrite);
                 if (got < 0)
-                    return fail(sock, handle, src_reserved, got);
+                    return fail(sock, fd, handle, src_reserved, got);
                 if (got == 0) {
                     eos = 1;
                 } else {
                     total_rx += got;
                     rc = sceMp3NotifyAddStreamData(handle, got);
                     if (rc < 0)
-                        return fail(sock, handle, src_reserved, rc);
+                        return fail(sock, fd, handle, src_reserved, rc);
                 }
             }
         }
@@ -165,7 +198,7 @@ static int decode_thread(SceSize args, void *argp)
                 continue;
             int rc = sceMp3Init(handle);
             if (rc < 0)
-                return fail(sock, handle, src_reserved, rc);
+                return fail(sock, fd, handle, src_reserved, rc);
             inited = 1;
             g_state = PLAYER_PLAYING;
         }
@@ -181,7 +214,7 @@ static int decode_thread(SceSize args, void *argp)
              * (16KB/s 以上で届いていれば数十回で必ず前に進む)。
              */
             if (++stall > 400) /* 約2秒 */
-                return fail(sock, handle, src_reserved, bytes);
+                return fail(sock, fd, handle, src_reserved, bytes);
             sceKernelDelayThread(5 * 1000);
             continue;
         }
@@ -210,7 +243,7 @@ static int decode_thread(SceSize args, void *argp)
             int hz = sceMp3GetSamplingRate(handle);
             int rc = sceAudioSRCChReserve(nsamples, hz, 2);
             if (rc < 0)
-                return fail(sock, handle, src_reserved, rc);
+                return fail(sock, fd, handle, src_reserved, rc);
             src_reserved = 1;
         }
         sceAudioSRCOutputBlocking(PSP_AUDIO_VOLUME_MAX, out);
@@ -221,6 +254,8 @@ static int decode_thread(SceSize args, void *argp)
         sceAudioSRCChRelease();
     sceMp3ReleaseMp3Handle(handle);
     net_close(sock);
+    if (fd >= 0)
+        sceIoClose(fd);
     g_state = g_cmd_stop ? PLAYER_STOPPED : PLAYER_FINISHED;
     return 0;
 }

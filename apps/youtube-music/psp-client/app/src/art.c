@@ -17,6 +17,7 @@
 #include "gfx.h"
 #include "theme.h"
 #include "common.h"
+#include "store.h"
 
 #define SLOTS 20          /* 同時に保持する枚数 (2段分 + 再生中) */
 #define QUEUE 24          /* 読み込み待ち行列 (画面内のカード数より多く) */
@@ -103,10 +104,24 @@ static int art_thread(SceSize args, void *argp)
             continue;
         }
 
-        char path[128];
-        snprintf(path, sizeof(path), "/art?id=%s&s=%d", id, ART_SIDE);
-        int got = http_get_bin(net_server_host(), net_server_port(), path,
-                              g_rx, sizeof(g_rx));
+        /* ダウンロード済みならローカルの .art を優先する
+           (オフライン時はこれが唯一の供給源になる) */
+        int got = 0;
+        {
+            char local[128];
+            store_art_path(id, local, sizeof(local));
+            FILE *fp = fopen(local, "rb");
+            if (fp) {
+                got = (int)fread(g_rx, 1, ART_SIDE * ART_SIDE * 4, fp);
+                fclose(fp);
+            }
+        }
+        if (got != ART_SIDE * ART_SIDE * 4) {
+            char path[128];
+            snprintf(path, sizeof(path), "/art?id=%s&s=%d", id, ART_SIDE);
+            got = http_get_bin(net_server_host(), net_server_port(), path,
+                               g_rx, sizeof(g_rx));
+        }
 
         lock();
         Slot *s = find_slot(id);

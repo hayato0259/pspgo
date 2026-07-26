@@ -2,8 +2,9 @@
  * PSP Go YouTube Music クライアント — 画面と状態機械
  *
  * 画面遷移: 接続 → ログイン選択 → ログイン(QR) → ホーム → プレイリスト → 再生
+ *           ホーム/接続失敗 → オフライン ライブラリ (ダウンロード済みの曲)
  * 操作: 上下=移動 / ○=決定 / ×=戻る / △=一時停止 / L,R=前後の曲
- *       SELECT=ログイン・ログアウト / START=終了
+ *       □=ダウンロード (オフライン画面では削除) / SELECT=ログイン / START=終了
  *
  * ログインは OAuth デバイスコードフロー。Google との通信はサーバーが行い、
  * このアプリは QR コードと入力コードを表示して承認完了を待つだけ。
@@ -26,6 +27,8 @@
 #include "login.h"
 #include "art.h"
 #include "snd.h"
+#include "store.h"
+#include "dl.h"
 
 PSP_MODULE_INFO("ytmusic", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -38,6 +41,7 @@ typedef enum {
     SCR_HOME,
     SCR_PLAYLIST,
     SCR_PLAYER,
+    SCR_OFFLINE,   /* ダウンロード済みの曲の一覧 (ネットワーク無しでも入れる) */
 } Screen;
 
 static int g_running = 1;
@@ -101,6 +105,10 @@ static void input_update(void)
             fired = 1;
             g_pressed |= PSP_CTRL_CIRCLE;
         }
+        /* プレイリスト画面では ○ の前に □ を1回押し、
+           ダウンロード経路 (dl.c → store.c) も自動で通す */
+        if (g_demo_screen == SCR_PLAYLIST && held == 140)
+            g_pressed |= PSP_CTRL_SQUARE;
     }
 #endif
 }
@@ -138,6 +146,8 @@ static int g_can_login = 0;      /* サーバーに OAuth クライアントが�
 static char g_account[64] = "-";
 static char g_error[192] = "";
 static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
+static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
+static int g_off_sel = 0, g_off_scroll = 0;   /* オフライン画面のカーソル */
 
 static void scroll_to(int sel, int *scroll)
 {
@@ -156,6 +166,17 @@ static void now_playing_bar(void)
     ApiTrack *t = &g_tracks[g_playing_index];
     ui_now_playing(t->video_id, t->title, t->artist, st,
                    player_elapsed_sec(), t->duration_sec);
+}
+
+/* ダウンロード進行中は画面右上に残数と曲名を小さく出す */
+static void dl_status_line(void)
+{
+    int n = dl_pending();
+    if (n <= 0)
+        return;
+    char buf[176];
+    snprintf(buf, sizeof(buf), "↓%d  %s", n, dl_current_title());
+    text_clipped(SCR_W - MARGIN - 150, 30, 150, C_DIM, 0.5f, buf);
 }
 
 /* --- 各画面 --- */
@@ -276,7 +297,21 @@ static Screen screen_connect_tick(void)
     ui_bg_ambient(0);
 
     if (step == 99) { /* エラー表示で停止 */
+        /* ダウンロード済みの曲があれば、接続できなくてもオフラインで使える */
+        int off_n = store_count();
+        if (off_n > 0 && (g_pressed & PSP_CTRL_CIRCLE)) {
+            snd_play(SND_OK);
+            g_off_sel = 0;
+            g_off_scroll = 0;
+            return SCR_OFFLINE;
+        }
         draw_splash(g_error, 1);
+        if (off_n > 0) {
+            char b[64];
+            snprintf(b, sizeof(b), "○: オフライン再生 (%d曲)", off_n);
+            text((SCR_W - gfx_text_width(0.62f, b)) / 2.0f, 212,
+                 C_TEXT, 0.62f, b);
+        }
         text(SCR_W / 2.0f - 40, 230, C_DIM, 0.6f, "START: 終了");
         gfx_frame_end();
         return SCR_CONNECT;
@@ -317,6 +352,7 @@ static Screen screen_connect_tick(void)
         return SCR_CONNECT;
     }
     g_auth = (rc > 0);
+    g_net_ok = 1;
 
     /* 未ログインでログイン可能なら、まず選択画面を出す */
     if (!g_auth && g_can_login) {
@@ -530,7 +566,41 @@ static Screen screen_home_tick(void)
         return SCR_WELCOME;
     }
 
+    /* △: オフライン ライブラリへ */
+    if (g_pressed & PSP_CTRL_TRIANGLE) {
+        snd_play(SND_OK);
+        g_off_sel = 0;
+        g_off_scroll = 0;
+        return SCR_OFFLINE;
+    }
+
     ApiItem *cur = selected_card();
+
+    /* □: 選択中の項目をダウンロード (曲はそのまま、プレイリストは全曲) */
+    if ((g_pressed & PSP_CTRL_SQUARE) && cur) {
+        if (cur->kind == 'V') {
+            ApiTrack t;
+            memset(&t, 0, sizeof(t));
+            snprintf(t.video_id, sizeof(t.video_id), "%s", cur->id);
+            snprintf(t.title, sizeof(t.title), "%s", cur->title);
+            snprintf(t.artist, sizeof(t.artist), "%s", cur->subtitle);
+            if (dl_enqueue(&t) == 0)
+                snd_play(SND_OK);
+        } else if (cur->kind == 'P') {
+            /* 再生キュー (g_tracks) を壊さないよう別バッファへ取得する */
+            static ApiTrack tmp[API_MAX_TRACKS];
+            char title[128];
+            int n = api_playlist(cur->id, title, sizeof(title),
+                                 tmp, API_MAX_TRACKS);
+            int queued = 0;
+            for (int i = 0; i < n; i++)
+                if (dl_enqueue(&tmp[i]) == 0)
+                    queued++;
+            if (queued > 0)
+                snd_play(SND_OK);
+        }
+    }
+
     if ((g_pressed & PSP_CTRL_CIRCLE) && cur) {
         snd_play(SND_OK);
         if (cur->kind == 'P') {
@@ -722,6 +792,7 @@ static Screen screen_home_tick(void)
                               playing ? SCR_H - BAR_H : SCR_H, playing);
     }
 
+    dl_status_line();
     now_playing_bar();
     gfx_frame_end();
     return SCR_HOME;
@@ -758,11 +829,21 @@ static Screen screen_playlist_tick(void)
         start_track(g_track_sel);
         return SCR_PLAYER;
     }
+    /* □: このプレイリストの全曲をオフライン用にダウンロード */
+    if ((g_pressed & PSP_CTRL_SQUARE) && g_track_count > 0) {
+        int queued = 0;
+        for (int i = 0; i < g_track_count; i++)
+            if (dl_enqueue(&g_tracks[i]) == 0)
+                queued++;
+        if (queued > 0)
+            snd_play(SND_OK);
+    }
 
     if (g_track_count > 0)
         ui_bg_ambient(art_avg_color(g_tracks[g_track_sel].video_id));
     ui_frame_begin();
-    ui_chrome(g_pl_title, "上下: 選択    ○: 再生    ×: 戻る", g_auth, g_account);
+    ui_chrome(g_pl_title, "○: 再生    □: 全曲ダウンロード    ×: 戻る",
+              g_auth, g_account);
     int y = LIST_TOP;
     for (int i = g_track_scroll;
          i < g_track_count && i < g_track_scroll + LIST_ROWS; i++) {
@@ -784,11 +865,138 @@ static Screen screen_playlist_tick(void)
                      t->duration_sec / 60, t->duration_sec % 60);
             text(SCR_W - 42, y + 13, C_DIM, 0.6f, dur);
         }
+        if (store_has(t->video_id))
+            text(SCR_W - 56, y + 13, C_DIM, 0.55f, "↓");   /* 保存済み */
         y += ROW_H;
     }
+    dl_status_line();
     now_playing_bar();
     gfx_frame_end();
     return SCR_PLAYLIST;
+}
+
+/* --- オフライン ライブラリ --- */
+
+/*
+ * ダウンロード済みの曲を再生キュー (g_tracks) に積んで再生を始める。
+ * 100 曲 (API_MAX_TRACKS) を超えて保存している場合は選択曲以降を積む。
+ */
+static Screen offline_play(int sel)
+{
+    int n = store_count();
+    if (n <= 0)
+        return SCR_OFFLINE;
+
+    int start = 0;
+    if (n > API_MAX_TRACKS) {
+        start = sel;
+        if (start > n - API_MAX_TRACKS)
+            start = n - API_MAX_TRACKS;
+    }
+    g_track_count = 0;
+    for (int i = start; i < n && g_track_count < API_MAX_TRACKS; i++)
+        if (store_get(i, &g_tracks[g_track_count]) == 0)
+            g_track_count++;
+
+    snprintf(g_pl_title, sizeof(g_pl_title), "オフライン ライブラリ");
+    g_track_sel = sel - start;
+    g_track_scroll = 0;
+    start_track(sel - start);
+    return SCR_PLAYER;
+}
+
+static Screen screen_offline_tick(void)
+{
+    int n = store_count();
+    if (g_off_sel >= n)
+        g_off_sel = (n > 0) ? n - 1 : 0;
+
+    if ((g_pressed & PSP_CTRL_UP) && g_off_sel > 0) {
+        g_off_sel--;
+        snd_play(SND_MOVE);
+    }
+    if ((g_pressed & PSP_CTRL_DOWN) && g_off_sel < n - 1) {
+        g_off_sel++;
+        snd_play(SND_MOVE);
+    }
+    scroll_to(g_off_sel, &g_off_scroll);
+
+    /* ネットワーク無しで起動した場合は戻る先が無いので × は効かせない */
+    if ((g_pressed & PSP_CTRL_CROSS) && g_net_ok) {
+        snd_play(SND_CANCEL);
+        return SCR_HOME;
+    }
+    if ((g_pressed & PSP_CTRL_CIRCLE) && n > 0) {
+        snd_play(SND_OK);
+        return offline_play(g_off_sel);
+    }
+    /* □: 選択中の曲を削除 (再生中なら止めてから) */
+    if ((g_pressed & PSP_CTRL_SQUARE) && n > 0) {
+        ApiTrack t;
+        if (store_get(g_off_sel, &t) == 0) {
+            if (g_playing_index >= 0 && g_playing_index < g_track_count &&
+                strcmp(g_tracks[g_playing_index].video_id, t.video_id) == 0) {
+                player_stop();
+                g_playing_index = -1;
+            }
+            store_remove(g_off_sel);
+            snd_play(SND_CANCEL);
+        }
+    }
+
+    ApiTrack sel_t;
+    int has_sel = (n > 0 && store_get(g_off_sel, &sel_t) == 0);
+
+    ui_bg_ambient(has_sel ? art_avg_color(sel_t.video_id) : 0);
+    ui_frame_begin();
+    char title[64];
+    snprintf(title, sizeof(title), "オフライン ライブラリ (%d曲)", n);
+    ui_chrome(title,
+              g_net_ok ? "○: 再生    □: 削除    ×: 戻る"
+                       : "○: 再生    □: 削除",
+              g_auth, g_account);
+
+    if (n == 0) {
+        text(24, 100, C_DIM, 0.8f, "まだダウンロードした曲がありません");
+        text(24, 128, C_DIM, 0.65f,
+             "プレイリスト画面で □ を押すと全曲を保存できます");
+        text(24, 148, C_DIM, 0.65f,
+             "保存した曲はサーバーが無くても再生できます");
+    }
+
+    int y = LIST_TOP;
+    for (int i = g_off_scroll;
+         i < n && i < g_off_scroll + LIST_ROWS; i++) {
+        ApiTrack t;
+        if (store_get(i, &t) != 0)
+            break;
+        int playing = (g_playing_index >= 0 && g_playing_index < g_track_count &&
+                       strcmp(g_tracks[g_playing_index].video_id,
+                              t.video_id) == 0 &&
+                       player_state() != PLAYER_STOPPED);
+        if (i == g_off_sel) {
+            draw_rect(0, y, SCR_W, ROW_H, C_SEL_BG);
+            draw_rect(0, y, 3, ROW_H, C_ACCENT);
+        }
+        art_draw(t.video_id, 8, y + 2, ROW_H - 4);
+        char line[200];
+        snprintf(line, sizeof(line), "%s%s", playing ? "♪ " : "", t.title);
+        text_clipped(30, y + 13, 230,
+                     (i == g_off_sel) ? C_TEXT : C_DIM,
+                     (i == g_off_sel) ? 0.72f : 0.65f, line);
+        text_clipped(268, y + 13, SCR_W - 268 - 48, C_DIM, 0.55f, t.artist);
+        if (t.duration_sec > 0) {
+            char dur[16];
+            snprintf(dur, sizeof(dur), "%d:%02d",
+                     t.duration_sec / 60, t.duration_sec % 60);
+            text(SCR_W - 42, y + 13, C_DIM, 0.6f, dur);
+        }
+        y += ROW_H;
+    }
+    dl_status_line();
+    now_playing_bar();
+    gfx_frame_end();
+    return SCR_OFFLINE;
 }
 
 /* --- プレイヤー --- */
@@ -869,6 +1077,7 @@ static Screen screen_player_tick(void)
     } else {
         text(24, 120, C_DIM, 0.75f, "(再生していません)");
     }
+    dl_status_line();
     gfx_frame_end();
     return SCR_PLAYER;
 }
@@ -884,9 +1093,11 @@ int main(void)
         sceKernelExitGame();
         return 0;
     }
+    store_init();               /* オフライン索引 (offline/index.tsv) */
     player_global_init();
     art_init();
     snd_init();
+    dl_init();
 
     Screen scr = SCR_CONNECT;
     while (g_running) {
@@ -925,11 +1136,13 @@ int main(void)
         case SCR_HOME:     scr = screen_home_tick();     break;
         case SCR_PLAYLIST: scr = screen_playlist_tick(); break;
         case SCR_PLAYER:   scr = screen_player_tick();   break;
+        case SCR_OFFLINE:  scr = screen_offline_tick();  break;
         }
     }
 
     login_cancel();
     player_stop();
+    dl_shutdown();
     art_shutdown();
     snd_shutdown();
     gfx_shutdown();
