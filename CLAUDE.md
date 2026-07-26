@@ -12,6 +12,10 @@ PSP Go (6.61 + Ark-4) で動く自作アプリ群。将来 GitHub で公開予�
 各アプリの詳細・設計判断はそのアプリの `docs/` を読むこと。
 youtube-music の実現可否検証は [apps/youtube-music/docs/verification-youtube-music.md](apps/youtube-music/docs/verification-youtube-music.md)。
 
+実機（PSP Go 本体）のセットアップ・CFW 選定・開発ループはアプリ横断の知識として
+[docs/psp-go-setup.md](docs/psp-go-setup.md) に置く。
+**PSP Go の内蔵ストレージは `ef0:`**（ms0: ではない）。apitype の罠もこのドキュメント参照。
+
 ## ビルド環境（共通）
 
 - ツールチェーン: `~/pspdev-install/pspdev` (pspdev v20260701 プリビルト, macOS arm64)

@@ -110,5 +110,8 @@
 
 ## 次の一手
 
-実機に CFW (Ark-4 推奨) を導入したら、PoC2 を `make SERVER_HOST=<MacのLAN IP>` で
-ビルドして `ms0:/PSP/GAME/poc2/EBOOT.PBP` に置き、実機での再生とスループットを確認する。
+実機に CFW を導入したら（選定と手順は [../../../docs/psp-go-setup.md](../../../docs/psp-go-setup.md)。
+ARK-4 は EOL、現行は FasterARK/ARK-5 だが PSP Go 固有バグありの pre-release）、
+PoC2 を `make SERVER_HOST=<MacのLAN IP>` でビルドして
+**`ef0:/PSP/GAME/poc2/EBOOT.PBP`**（PSP Go の内蔵ストレージ。ms0: ではない）に置き、
+実機での再生とスループットを確認する。
