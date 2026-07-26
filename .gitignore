@@ -4,3 +4,12 @@ EBOOT.PBP
 PARAM.SFO
 __pycache__/
 .DS_Store
+.venv/
+
+# 認証情報 (絶対にコミットしない)
+auth/
+browser.json
+oauth.json
+
+# PSP の PGF フォント (著作物。テスト時にローカルへ置くだけ)
+*.pgf
