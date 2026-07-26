@@ -451,6 +451,18 @@ static Screen screen_home_tick(void)
         sec->cursor++;
         snd_play(SND_MOVE);
     }
+    /* L/R トリガー: 1 ページ分まとめて送る (リストは 4 件、カルーセルは 6 件) */
+    if (sec && (g_pressed & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER))) {
+        int step = section_compact(sec) ? 4
+                 : (SCR_W - MARGIN * 2 - CARD_SIZE) / CARD_PITCH + 1;
+        int c = sec->cursor + ((g_pressed & PSP_CTRL_RTRIGGER) ? step : -step);
+        if (c > sec->count - 1) c = sec->count - 1;
+        if (c < 0) c = 0;
+        if (c != sec->cursor) {
+            sec->cursor = c;
+            snd_play(SND_MOVE);
+        }
+    }
     if (g_pressed & PSP_CTRL_UP) {
         int i = g_section_sel - 1;
         while (i >= 0 && g_sections[i].count == 0) i--;
@@ -552,42 +564,51 @@ static Screen screen_home_tick(void)
         }
 
         if (section_compact(s)) {
-            /* --- コンパクトな行リスト (PC 版の「おすすめ」形式) --- */
-            const int lrow = 24;      /* 1 行の高さ */
-            const int visrows = 3;    /* 完全に見える行数 */
-            int ltarget = s->cursor - 1;
-            if (ltarget > s->count - visrows) ltarget = s->count - visrows;
-            if (ltarget < 0) ltarget = 0;
-            scrollf[si] += ((float)ltarget - scrollf[si]) * 0.22f;
-            if (scrollf[si] < 0) scrollf[si] = 0;
+            /*
+             * --- コンパクトな行リスト (PC 版の「おすすめ」形式) ---
+             * 4 行を 1 ページとし、ページ単位で横にスライドする
+             * (カルーセルと同じ動き)。カーソルが境界を越えると
+             * ページ全体が滑らかに切り替わる。
+             */
+            const int lrow = 18;      /* 1 行の高さ */
+            const int pgrows = 4;     /* 1 ページの行数 */
+            int page = s->cursor / pgrows;
+            scrollf[si] += ((float)page - scrollf[si]) * 0.18f;
+            float pf = scrollf[si];
 
-            int lfirst = (int)scrollf[si];
-            float lfrac = scrollf[si] - (float)lfirst;
+            int pages = (s->count + pgrows - 1) / pgrows;
+            for (int p = 0; p < pages; p++) {
+                float px = ((float)p - pf) * (float)SCR_W;
+                if (px < -(float)SCR_W || px > (float)SCR_W)
+                    continue;   /* 画面に少しも掛からないページは飛ばす */
+                for (int r = 0; r < pgrows; r++) {
+                    int item = p * pgrows + r;
+                    if (item >= s->count)
+                        break;
+                    int idx = s->first + item;
+                    if (idx >= g_home_count)
+                        break;
+                    ApiItem *it = &g_home_items[idx];
+                    float rx = MARGIN + px;
+                    int ry = base_y + 8 + r * lrow;
+                    int selrow = active && item == s->cursor;
 
-            /* 段の領域からはみ出す行はシザーで切る (次の段に被せない) */
-            sceGuScissor(0, base_y + 6, SCR_W, visrows * lrow + 6);
-            for (int r = 0; r <= visrows && lfirst + r < s->count; r++) {
-                int idx = s->first + lfirst + r;
-                if (idx >= g_home_count)
-                    break;
-                ApiItem *it = &g_home_items[idx];
-                int ry = base_y + 10 + (int)(((float)r - lfrac) * lrow);
-                int selrow = active && (lfirst + r) == s->cursor;
-
-                if (selrow) {
-                    draw_rect(MARGIN - 8, ry, SCR_W - (MARGIN - 8) * 2, lrow,
-                              C_SEL_BG);
-                    draw_rect(MARGIN - 8, ry, 3, lrow, C_ACCENT);
+                    if (selrow) {
+                        draw_rect((int)rx - 8, ry,
+                                  SCR_W - (MARGIN - 8) * 2, lrow, C_SEL_BG);
+                        draw_rect((int)rx - 8, ry, 3, lrow, C_ACCENT);
+                    }
+                    art_draw_ex(it->id, rx, ry + 1, lrow - 2,
+                                active ? 0xFFFFFFFF : C_CARD_DIM);
+                    /* 1 行構成: 左に曲名、右の固定位置にアーティスト等 */
+                    text_clipped(rx + 24, ry + 13, 202,
+                                 selrow ? C_TEXT :
+                                 (active ? 0xFFDDDDDD : C_DIM),
+                                 0.56f, it->title);
+                    text_clipped(rx + 234, ry + 13, SCR_W - MARGIN - 234,
+                                 C_DIM, 0.5f, it->subtitle);
                 }
-                art_draw_ex(it->id, MARGIN, ry + 2, lrow - 4,
-                            active ? 0xFFFFFFFF : C_CARD_DIM);
-                text_clipped(MARGIN + 28, ry + 10, SCR_W - MARGIN * 2 - 28,
-                             selrow ? C_TEXT :
-                             (active ? 0xFFDDDDDD : C_DIM), 0.56f, it->title);
-                text_clipped(MARGIN + 28, ry + 20, SCR_W - MARGIN * 2 - 28,
-                             C_DIM, 0.48f, it->subtitle);
             }
-            sceGuScissor(0, 0, SCR_W, SCR_H);
             continue;   /* このセクションはカルーセルを描かない */
         }
 
