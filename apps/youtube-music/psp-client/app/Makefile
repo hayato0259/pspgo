@@ -1,5 +1,5 @@
 TARGET = ytmusic
-OBJS = src/main.o src/gfx.o src/ui.o src/net.o src/api.o src/player.o src/login.o src/tsv.o src/art.o src/snd.o src/store.o src/dl.o
+OBJS = src/main.o src/gfx.o src/ui.o src/net.o src/api.o src/player.o src/login.o src/tsv.o src/art.o src/snd.o src/store.o src/dl.o src/osk.o
 
 # PPSSPP でホスト上のサーバーに繋ぐ場合は 127.0.0.1 のまま。
 # 実機では Mac の LAN IP に差し替える: make SERVER_HOST=192.168.x.x

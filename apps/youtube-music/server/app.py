@@ -7,6 +7,7 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
 エンドポイント:
   GET /api/status            認証状態:  auth\t0|1 / name\t<表示名> / can_login\t0|1
   GET /api/home              ホーム:    section\t<題> / playlist\t<id>\t<題>\t<副題> / video\t<id>\t<題>\t<アーティスト>
+  GET /api/search?q=<検索語> 検索:      section\t<題> / video\t... / playlist\t...
   GET /api/playlist?id=<id>  内容:      meta\t<題> / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
   GET /api/radio?yt=<videoId> ラジオ:   meta\tラジオ / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
   GET /api/lyrics?yt=<videoId> 歌詞:    line\t<歌詞1行> / none\t1
@@ -373,6 +374,45 @@ def tsv_home() -> str:
     return "\n".join(lines) + "\n"
 
 
+def tsv_search(query: str) -> str:
+    songs, _ = with_fallback(
+        lambda yt: yt.search(query, filter="songs", limit=20),
+        "曲の検索",
+    )
+    playlists, _ = with_fallback(
+        lambda yt: yt.search(query, filter="community_playlists", limit=10),
+        "プレイリストの検索",
+    )
+
+    lines = ["section\t曲"]
+    for item in songs[:20]:
+        video_id = item.get("videoId")
+        if not video_id:
+            continue
+        remember_art(video_id, item.get("thumbnails"))
+        lines.append(
+            f"video\t{clean(video_id)}\t{clean(item.get('title'))}"
+            f"\t{clean(artists_of(item))}"
+        )
+
+    lines.append("section\tプレイリスト")
+    for item in playlists[:10]:
+        # ytmusicapi の版により playlistId または browseId で返る。
+        playlist_id = item.get("playlistId") or item.get("browseId")
+        if not playlist_id:
+            continue
+        if playlist_id.startswith("VL"):
+            playlist_id = playlist_id[2:]
+        remember_art(playlist_id, item.get("thumbnails"))
+        subtitle = (clean(item.get("description")) or
+                    clean(artists_of(item)) or clean(item.get("author")))
+        lines.append(
+            f"playlist\t{clean(playlist_id)}\t{clean(item.get('title'))}"
+            f"\t{subtitle}"
+        )
+    return "\n".join(lines) + "\n"
+
+
 def tsv_playlist(pid: str) -> str:
     def fetch(yt):
         try:
@@ -517,6 +557,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if url.path == "/api/home":
                 self._text(tsv_home())
+                return
+            if url.path == "/api/search" and "q" in q:
+                self._text(tsv_search(q["q"][0]))
                 return
             if url.path == "/api/playlist" and "id" in q:
                 self._text(tsv_playlist(q["id"][0]))
