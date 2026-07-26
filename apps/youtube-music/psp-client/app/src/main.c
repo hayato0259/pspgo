@@ -472,8 +472,10 @@ static Screen screen_home_tick(void)
             snd_play(SND_MOVE);
         }
     }
+    /* 上下は「いま見えているページの中」だけを移動し、
+       ページの上端/下端 (4件目・8件目など) では隣のセクションへ抜ける */
     if (g_pressed & PSP_CTRL_UP) {
-        if (compact && sec->cursor > 0) {
+        if (compact && (sec->cursor % page_step) > 0) {
             sec->cursor--;
             snd_play(SND_MOVE);
         } else {
@@ -483,7 +485,8 @@ static Screen screen_home_tick(void)
         }
     }
     if (g_pressed & PSP_CTRL_DOWN) {
-        if (compact && sec->cursor < sec->count - 1) {
+        if (compact && (sec->cursor % page_step) < page_step - 1 &&
+            sec->cursor < sec->count - 1) {
             sec->cursor++;
             snd_play(SND_MOVE);
         } else {
