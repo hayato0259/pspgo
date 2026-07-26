@@ -71,6 +71,7 @@ static void setup_callbacks(void)
 /* --- 入力 (エッジ検出) --- */
 static unsigned int g_prev_buttons = 0;
 static unsigned int g_pressed = 0;
+static unsigned int g_pressed_edge = 0;
 static int g_repeat_timer = 0;
 static int g_demo_screen = -1;  /* AUTODEMO / SHOTDUMP が参照する現在の画面 */
 
@@ -79,7 +80,8 @@ static void input_update(void)
     SceCtrlData pad;
     sceCtrlPeekBufferPositive(&pad, 1);
     unsigned int now = pad.Buttons;
-    g_pressed = now & ~g_prev_buttons;
+    g_pressed_edge = now & ~g_prev_buttons;
+    g_pressed = g_pressed_edge;
 
     /* 上下キーはリピートさせる */
     if (now & (PSP_CTRL_UP | PSP_CTRL_DOWN)) {
@@ -157,6 +159,10 @@ typedef enum {
 static int g_playing_index = -1; /* g_tracks 内の再生中インデックス */
 static PlayMode g_play_mode = PLAY_MODE_NORMAL;
 static unsigned int g_shuffle_history[SHUFFLE_HISTORY_WORDS];
+static const int g_sleep_timer_minutes[] = { 0, 15, 30, 60, 90 };
+static int g_sleep_timer_option = 0;
+static unsigned long long g_sleep_timer_remaining_us = 0;
+static unsigned int g_sleep_timer_last_us = 0;
 static int g_auth = 0;
 static int g_can_login = 0;      /* サーバーに OAuth クライアントが設定済みか */
 static char g_account[64] = "-";
@@ -250,6 +256,59 @@ static const char *play_mode_label(void)
         return "";
     }
     return "";
+}
+
+static void cycle_sleep_timer(void)
+{
+    g_sleep_timer_option =
+        (g_sleep_timer_option + 1) %
+        (int)(sizeof(g_sleep_timer_minutes) / sizeof(g_sleep_timer_minutes[0]));
+
+    int minutes = g_sleep_timer_minutes[g_sleep_timer_option];
+    if (minutes == 0) {
+        g_sleep_timer_remaining_us = 0;
+        return;
+    }
+
+    g_sleep_timer_remaining_us =
+        (unsigned long long)minutes * 60ULL * 1000000ULL;
+    g_sleep_timer_last_us = (unsigned int)sceKernelGetSystemTimeLow();
+}
+
+/*
+ * sceKernelGetSystemTimeLow() は約71分で周回するため、期限の絶対値ではなく
+ * 毎ループの unsigned 差分を64-bitの残り時間から引く。
+ */
+static int sleep_timer_tick(void)
+{
+    if (g_sleep_timer_option == 0)
+        return 0;
+
+    unsigned int now = (unsigned int)sceKernelGetSystemTimeLow();
+    unsigned int elapsed = now - g_sleep_timer_last_us;
+    g_sleep_timer_last_us = now;
+
+    if ((unsigned long long)elapsed >= g_sleep_timer_remaining_us) {
+        g_sleep_timer_option = 0;
+        g_sleep_timer_remaining_us = 0;
+        return 1;
+    }
+
+    g_sleep_timer_remaining_us -= (unsigned long long)elapsed;
+    return 0;
+}
+
+static void draw_sleep_timer(int x, int y)
+{
+    if (g_sleep_timer_option == 0)
+        return;
+
+    unsigned int seconds =
+        (unsigned int)((g_sleep_timer_remaining_us + 999999ULL) / 1000000ULL);
+    char timer[32];
+    snprintf(timer, sizeof(timer), "タイマー %u:%02u",
+             seconds / 60, seconds % 60);
+    text(x, y, C_DIM, 0.6f, timer);
 }
 
 static void scroll_to(int sel, int *scroll)
@@ -1177,6 +1236,10 @@ static Screen screen_player_tick(void)
         snd_play(SND_OK);
         cycle_play_mode();
     }
+    if (g_pressed_edge & PSP_CTRL_DOWN) {
+        snd_play(SND_OK);
+        cycle_sleep_timer();
+    }
     if ((g_pressed & PSP_CTRL_SQUARE) &&
         g_playing_index >= 0 && g_playing_index < g_track_count) {
         if (replace_queue_with_radio() == 0) {
@@ -1209,7 +1272,7 @@ static Screen screen_player_tick(void)
     ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
     ui_frame_begin();
     ui_chrome("再生中",
-              "↑: 歌詞  △: 一時停止  □: ラジオ  L/R: 前後  SELECT: 再生モード  ×: 一覧",
+              "↑: 歌詞  ↓: タイマー  △: 一時停止  □: ラジオ  L/R: 前後  SELECT: 再生モード  ×: 一覧",
               g_auth, g_account);
     if (t) {
         /* 左に大きなアートワーク (柔らかい影のみ、枠なし)、右に曲情報 */
@@ -1240,6 +1303,7 @@ static Screen screen_player_tick(void)
             snprintf(e, sizeof(e), "code: 0x%08X", player_last_error());
             text(tx, 152, C_DIM, 0.6f, e);
         }
+        draw_sleep_timer(st == PLAYER_ERROR ? 370 : tx, 152);
 
         /* 進捗バー (細いトラック + 赤 + 角丸のつまみ) */
         int elapsed = player_elapsed_sec();
@@ -1266,6 +1330,7 @@ static Screen screen_player_tick(void)
         }
     } else {
         text(24, 120, C_DIM, 0.75f, "(再生していません)");
+        draw_sleep_timer(168, 152);
     }
     if (g_radio_error_frames > 0) {
         text_clipped(168, 176, SCR_W - 184, C_ACCENT, 0.58f,
@@ -1397,6 +1462,12 @@ int main(void)
         input_update();
         if (g_pressed & PSP_CTRL_START)
             break;
+
+        /* スリープタイマーはどの画面にいても満了させ、自動次曲送りも止める */
+        if (sleep_timer_tick()) {
+            player_stop();
+            g_playing_index = -1;
+        }
 
         /* 曲が終わったら、どの画面にいても自動で次の曲へ進む */
         if (player_state() == PLAYER_FINISHED && g_playing_index >= 0) {
