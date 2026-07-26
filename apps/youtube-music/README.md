@@ -52,19 +52,38 @@ PSP 自体では現代の TLS も JavaScript も扱えないため、Google と�
 
 ### OAuth クライアントの用意（初回のみ）
 
-Google が要求する仕様上、**自分の Google Cloud プロジェクトで OAuth クライアントを作る必要がある**。
+Google の仕様上、**自分の Google Cloud プロジェクトで OAuth クライアントを作る必要がある**。
+Firebase プロジェクトは Google Cloud プロジェクトと同一なので、既存の Firebase
+プロジェクトをそのまま使える（ただし設定場所は Firebase コンソールではなく
+**Google Cloud Console** 側）。
 
-1. [Google Cloud Console](https://console.cloud.google.com/) でプロジェクトを作る
-2. **YouTube Data API v3** を有効化する
-3. 「APIとサービス」→「認証情報」→ OAuth クライアント ID を作成。
+1. [Google Cloud Console](https://console.cloud.google.com/) で対象プロジェクトを選ぶ
+2. 「APIとサービス」→「ライブラリ」→ **YouTube Data API v3** を有効化
+3. 「APIとサービス」→「OAuth 同意画面」を設定
+   - User Type は「外部」
+   - 公開状態が「テスト中」の間は、**自分の Google アカウントを
+     「テストユーザー」に追加する**。追加していないとログイン承認が拒否される
+4. 「APIとサービス」→「認証情報」→「認証情報を作成」→「OAuth クライアント ID」。
    アプリケーションの種類は **「テレビと入力が制限されているデバイス」** を選ぶ
-4. 発行された client_id / client_secret を `server/auth/oauth_client.json` に置く:
+   （「ウェブアプリケーション」ではデバイスコードフローが使えない）
+5. 発行された client_id / client_secret を `server/auth/oauth_client.json` に置く。
+   `oauth_client.example.json` をコピーして書き換えるとよい:
 
 ```json
 { "client_id": "...apps.googleusercontent.com", "client_secret": "..." }
 ```
 
 Google Cloud からダウンロードした JSON（`installed` でネストした形式）もそのまま置ける。
+
+6. 設定が正しいかを確認する:
+
+```bash
+cd server
+./.venv/bin/python tools/check_oauth_client.py
+```
+
+ファイルの形式、クライアント種別、そして実際に Google からデバイスコードを
+取得できるかまで検査する。`client_secret` は画面に出力しない。
 
 未設定の場合、アプリはログイン選択画面を出さず、一般向けホームで起動する。
 

@@ -1,0 +1,5 @@
+{
+  "_comment": "このファイルを auth/oauth_client.json にコピーして値を入れてください。Google Cloud Console からダウンロードした JSON (installed でネストした形) をそのまま置いても動きます。",
+  "client_id": "ここに client_id (....apps.googleusercontent.com)",
+  "client_secret": "ここに client_secret"
+}
