@@ -13,3 +13,5 @@ oauth.json
 
 # PSP の PGF フォント (著作物。テスト時にローカルへ置くだけ)
 *.pgf
+/wt-*/
+apps/youtube-music/server/server.log

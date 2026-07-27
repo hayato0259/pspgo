@@ -227,9 +227,24 @@ make
 
 ### PPSSPP で動かす
 
+**`run.sh` を実行するだけ**。サーバー起動・ビルド・配置・PPSSPP 起動をまとめてやる:
+
+```bash
+./run.sh
+```
+
+| オプション | 動作 |
+|---|---|
+| `--demo` | AUTODEMO ビルド（○を自動入力して画面遷移を辿る） |
+| `--no-server` | 配信サーバーを起動しない（別で動かしている場合） |
+| `--clean` | `make clean` してからビルド |
+
+手動でやる場合:
+
 ```bash
 make          # SERVER_HOST=127.0.0.1 のまま
 cp EBOOT.PBP ~/.config/ppsspp/PSP/GAME/YTMUSIC/
+open -a PPSSPPSDL --args ~/.config/ppsspp/PSP/GAME/YTMUSIC/EBOOT.PBP
 ```
 
 - PPSSPP は `flash0` が仮想ファイルシステムでフォントを開けないことがある。
