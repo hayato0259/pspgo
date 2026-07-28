@@ -28,6 +28,7 @@ auth/oauth_client.json に client_id / client_secret を置く (README 参照)�
 """
 
 import json
+import os
 import shutil
 import subprocess
 import sys
@@ -36,6 +37,13 @@ import time
 import urllib.parse
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
+
+# yt-dlp を venv に入れている環境 (Raspberry Pi 等) では、PATH を通さずに
+# .venv/bin/python app.py と起動すると yt-dlp が見つからない。
+# 自分と同じ場所にある実行ファイルを探せるよう PATH の先頭に足しておく。
+os.environ["PATH"] = os.pathsep.join(
+    [str(Path(sys.executable).parent), os.environ.get("PATH", "")]
+)
 
 from ytmusicapi import OAuthCredentials, YTMusic
 from ytmusicapi.auth.oauth import RefreshingToken
@@ -644,7 +652,11 @@ def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     for tool in ("ffmpeg", "yt-dlp"):
         if not shutil.which(tool):
-            sys.exit(f"{tool} is required (brew install {tool})")
+            sys.exit(
+                f"{tool} が見つかりません "
+                f"(macOS: brew install {tool} / Debian: apt install {tool}。"
+                f"yt-dlp は .venv/bin/pip install -U yt-dlp でも可)"
+            )
     print(f"[server] auth: {'browser.json' if is_authed() else 'なし (一般向けホーム)'}")
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"[server] listening on 0.0.0.0:{port}")
