@@ -292,6 +292,7 @@ static void video_release(void)
         video_stop();
         g_video_for[0] = '\0';
     }
+    player_gate(0);   /* 映像待ちで止めていた音を必ず開ける */
 }
 static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 static int g_off_sel = 0, g_off_scroll = 0;   /* オフライン画面のカーソル */

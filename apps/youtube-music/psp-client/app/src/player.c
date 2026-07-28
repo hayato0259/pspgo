@@ -107,6 +107,12 @@ int player_start(const char *video_id, int duration_hint_sec, int start_sec)
 
     g_duration_hint = duration_hint_sec;
     g_start_sec = start_sec > 0 ? start_sec : 0;
+    /*
+     * 音を止める指示は前の再生に紐づくもの。持ち越すと、
+     * 動画を一度見たあと別の曲が無音のままになる。必ず開けてから始める
+     * (映像が要るなら video_sync が改めて閉じ直す)。
+     */
+    g_gate = 0;
     g_cmd_stop = 0;
     g_paused = 0;
     g_frames = 0;
@@ -152,8 +158,16 @@ static int fail(int sock, FILE *fp, int handle, int src_reserved, int code)
     net_close(sock);
     if (fp)
         fclose(fp);
-    g_last_error = code;
-    g_state = PLAYER_ERROR;
+    /*
+     * 停止要求で終わった場合は異常ではない。
+     * 曲の切り替えやシークでは、前の再生スレッドが受信待ちを打ち切って
+     * ここへ来る。これをエラー扱いにすると、新しい再生が始まる直前に
+     * 一瞬「エラー」が出てしまう (実際に見えていた)。
+     */
+    if (!g_cmd_stop) {
+        g_last_error = code;
+        g_state = PLAYER_ERROR;
+    }
     return -1;
 }
 
