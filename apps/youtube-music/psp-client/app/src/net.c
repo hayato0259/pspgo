@@ -30,6 +30,12 @@ static unsigned int g_srv_ip;
 static int g_srv_ip_ok = 0;
 static char g_srv_ip_host[64];
 static char g_resolver_buf[1024] __attribute__((aligned(64)));
+/*
+ * 名前解決は作業バッファを 1 つしか持たないため、複数のスレッドから
+ * 同時に呼ぶと壊れる。再生・ダウンロード・対応バージョン取得が
+ * それぞれ別スレッドで通信するので、ここだけは順番待ちさせる。
+ */
+static SceUID g_resolve_lock = -1;
 
 static char *trim_line(char *line)
 {
@@ -145,23 +151,35 @@ static int resolve_host(const char *host, unsigned int *ip)
         return 0;
     }
 
+    if (g_resolve_lock >= 0)
+        sceKernelWaitSema(g_resolve_lock, 1, NULL);
+
+    /* 待っている間に他のスレッドが解決していれば、その結果を使う */
+    if (g_srv_ip_ok && strcmp(host, g_srv_ip_host) == 0) {
+        *ip = g_srv_ip;
+        if (g_resolve_lock >= 0)
+            sceKernelSignalSema(g_resolve_lock, 1);
+        return 0;
+    }
+
     int rid;
     int rc = sceNetResolverCreate(&rid, g_resolver_buf,
                                   sizeof(g_resolver_buf));
-    if (rc < 0)
-        return -2;
-
     struct in_addr resolved;
-    rc = sceNetResolverStartNtoA(rid, host, &resolved, 5, 2);
-    sceNetResolverDelete(rid);
-    if (rc < 0)
-        return -2;
+    if (rc >= 0) {
+        rc = sceNetResolverStartNtoA(rid, host, &resolved, 5, 2);
+        sceNetResolverDelete(rid);
+    }
+    if (rc >= 0) {
+        g_srv_ip = resolved.s_addr;
+        snprintf(g_srv_ip_host, sizeof(g_srv_ip_host), "%s", host);
+        g_srv_ip_ok = 1;
+        *ip = g_srv_ip;
+    }
 
-    g_srv_ip = resolved.s_addr;
-    snprintf(g_srv_ip_host, sizeof(g_srv_ip_host), "%s", host);
-    g_srv_ip_ok = 1;
-    *ip = g_srv_ip;
-    return 0;
+    if (g_resolve_lock >= 0)
+        sceKernelSignalSema(g_resolve_lock, 1);
+    return (rc >= 0) ? 0 : -2;
 }
 
 int net_init(void)
@@ -179,6 +197,8 @@ int net_init(void)
     if (rc < 0) return rc;
     rc = sceNetResolverInit();
     if (rc < 0) return rc;
+    if (g_resolve_lock < 0)
+        g_resolve_lock = sceKernelCreateSema("net_resolve", 0, 1, 1, NULL);
     rc = sceNetApctlInit(0x8000, 48);
     if (rc < 0) return rc;
 

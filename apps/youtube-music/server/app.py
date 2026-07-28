@@ -380,13 +380,20 @@ def tsv_home() -> str:
         lines.append(f"section\t{clean(section.get('title'))}")
         for item in section.get("contents", []):
             title = clean(item.get("title"))
-            remember_art(item.get("playlistId") or item.get("videoId"),
+            # アートワークは、下で書き出すのと同じ id で覚える
+            # (食い違うとクライアントが取りに来た id で見つからない)
+            remember_art(item.get("videoId") or item.get("playlistId"),
                          item.get("thumbnails"))
-            if item.get("playlistId"):
+            # videoId を先に見る。
+            # 「もう一度聴く」などに並ぶ曲は videoId と playlistId の両方を持ち、
+            # その playlistId は「この曲のラジオ」(RDAMVM+videoId) でしかない。
+            # playlistId を先に見ると 1 曲がプレイリスト扱いになり、
+            # 押しても再生が始まらず一覧が開いてしまう。
+            if item.get("videoId"):
+                lines.append(f"video\t{clean(item['videoId'])}\t{title}\t{clean(artists_of(item))}")
+            elif item.get("playlistId"):
                 sub = clean(item.get("description")) or clean(artists_of(item))
                 lines.append(f"playlist\t{clean(item['playlistId'])}\t{title}\t{sub}")
-            elif item.get("videoId"):
-                lines.append(f"video\t{clean(item['videoId'])}\t{title}\t{clean(artists_of(item))}")
     return "\n".join(lines) + "\n"
 
 

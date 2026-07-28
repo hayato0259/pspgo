@@ -1597,8 +1597,11 @@ static Screen screen_player_tick(void)
             text(mode_x, 132, C_DIM, 0.6f, mode_label);
         }
         if (st == PLAYER_ERROR) {
-            char e[64];
-            snprintf(e, sizeof(e), "code: 0x%08X", player_last_error());
+            char e[80];
+            if (player_last_error() == PLAYER_ERR_NO_DATA)
+                snprintf(e, sizeof(e), "%s", "この曲を取得できませんでした");
+            else
+                snprintf(e, sizeof(e), "code: 0x%08X", player_last_error());
             text(tx, 152, C_DIM, 0.6f, e);
         }
         draw_sleep_timer(st == PLAYER_ERROR ? 370 : tx, 152);

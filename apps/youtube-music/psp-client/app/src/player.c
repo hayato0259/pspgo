@@ -241,6 +241,11 @@ static int decode_body(SceSize args, void *argp)
         if (!inited) {
             if (total_rx < 16 * 1024 && !eos)
                 continue;
+            if (total_rx == 0) {
+                /* 接続はできたが中身が空。その曲をサーバーが取得できなかった
+                   ということなので、デコーダのエラー番号ではなく理由を返す */
+                return fail(sock, fp, handle, src_reserved, PLAYER_ERR_NO_DATA);
+            }
             int rc = sceMp3Init(handle);
             if (rc < 0)
                 return fail(sock, fp, handle, src_reserved, rc);

@@ -4,6 +4,9 @@
 #   ./deploy-pi.sh <user>@<host>            例: ./deploy-pi.sh pi@192.168.0.50
 #   ./deploy-pi.sh <user>@<host> --no-auth  認証ファイル (auth/) を送らない
 #
+# 既定以外の鍵で接続する場合は環境変数で渡す:
+#   PSPGO_SSH_KEY=~/.ssh/pspgo_pi ./deploy-pi.sh pi@192.168.0.50
+#
 # 2回目以降は同じコマンドで更新できる (rsync + セットアップの再実行)。
 #
 # リポジトリは private なので Pi から git clone しない。
@@ -22,6 +25,12 @@ SEND_AUTH=1
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$APP_DIR/server"
 DEST="pspgo-server"          # Pi のホームからの相対パス
+
+# 鍵を指定されていれば ssh と rsync の両方に効かせる
+SSH_CMD=(ssh)
+if [[ -n "${PSPGO_SSH_KEY:-}" ]]; then
+    SSH_CMD=(ssh -i "${PSPGO_SSH_KEY/#\~/$HOME}")
+fi
 
 echo "==> 転送先: $TARGET:~/$DEST"
 
@@ -48,8 +57,8 @@ else
     echo "    auth/browser.json が無いのでそのまま進みます"
 fi
 
-ssh "$TARGET" "mkdir -p ~/$DEST"
-rsync -az --delete "${EXCLUDES[@]}" "$SRC/" "$TARGET:~/$DEST/"
+"${SSH_CMD[@]}" "$TARGET" "mkdir -p ~/$DEST"
+rsync -az --delete -e "${SSH_CMD[*]}" "${EXCLUDES[@]}" "$SRC/" "$TARGET:~/$DEST/"
 
 echo "==> Pi 側のセットアップを実行"
-ssh -t "$TARGET" "chmod +x ~/$DEST/setup-pi.sh && ~/$DEST/setup-pi.sh"
+"${SSH_CMD[@]}" -t "$TARGET" "chmod +x ~/$DEST/setup-pi.sh && ~/$DEST/setup-pi.sh"

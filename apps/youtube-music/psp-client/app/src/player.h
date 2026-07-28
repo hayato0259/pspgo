@@ -1,6 +1,10 @@
 #ifndef PLAYER_H
 #define PLAYER_H
 
+/* サーバーが 1 バイトも返さなかった (その曲を取得できなかった) 場合の印。
+   生のデコーダのエラー番号と区別して、画面に理由を出すために使う */
+#define PLAYER_ERR_NO_DATA (-2000)
+
 typedef enum {
     PLAYER_STOPPED = 0,
     PLAYER_BUFFERING,
