@@ -109,6 +109,9 @@ PC 版 YouTube Music に無い要素を画面に足さない。
 - 操作の説明は画面下の共通の行にまとめる。部品の脇に個別のヒントを置かない
 - 迷ったら PC 版 YouTube Music の実際の画面を基準にする。
   そこに無いなら出さない
+- **アイコンは Google Material Symbols を使う**（本家と同じ絵柄）。
+  自前で図形を描き起こさない。`apps/youtube-music/tools/make_icons.py` で
+  ビットマップに落として焼き込む形にしてある
 
 ## 方針
 

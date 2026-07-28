@@ -168,6 +168,10 @@ cd server
 
 ## 使用ライブラリ
 
+- **アイコン**: Google Material Symbols（Apache License 2.0）。本家と同じ絵柄にするため。
+  PSP 側にフォント描画機構を持ち込まず、必要な絵柄だけをビットマップにして
+  `psp-client/app/src/icons.c` に焼き込んである（直接編集しない）。
+  絵柄を足すときは `tools/make_icons.py` の一覧に加えて実行する
 - **PSP 側**: intraFont（PSP 内蔵 PGF フォント描画。UI は日本語表示）/ sceGu（描画）/
   sceMp3 + sceAudio（Media Engine でのハードウェア MP3 デコード）/ sceNetInet（生ソケット）
   - **JSON パーサは使わない**。サーバーがタブ区切りテキスト（TSV）を返すことで、

@@ -2,6 +2,7 @@
 #define GFX_H
 
 #include <intraFont.h>
+#include "icons.h"
 
 /*
  * 描画基盤。GU の初期化、フレーム制御、2D プリミティブ、
@@ -63,8 +64,11 @@ void gfx_logo(int x, int y, int size);                    /* YT Music ロゴ */
 void gfx_glow(float x, float y, float w, float h, int alpha);   /* 白い光彩 */
 void gfx_shadow(float x, float y, float w, float h, int alpha); /* 柔らかい落ち影 */
 void gfx_card_fill(float x, float y, float size, unsigned int color); /* 角丸ベタ塗り */
-/* 高評価・低評価の親指。up=1 で上向き、0 で下向き */
-void gfx_thumb(float x, float y, float size, int up, unsigned int color);
+/*
+ * Material Symbols のアイコン。本家と同じ絵柄を使うため焼き込んである
+ * (tools/make_icons.py が生成)。color で色を指定する。
+ */
+void gfx_icon(IconId id, float x, float y, float size, unsigned int color);
 
 /* --- テキスト --- */
 void text(float x, float y, unsigned int color, float size, const char *s);

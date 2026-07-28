@@ -1632,10 +1632,13 @@ static void draw_rating(float x, float y)
 {
     if (!g_info)
         return;
-    unsigned int up = (g_info->rating == RATE_LIKE) ? C_TEXT : C_DIM;
-    unsigned int down = (g_info->rating == RATE_DISLIKE) ? C_TEXT : C_DIM;
-    gfx_thumb(x, y, 16.0f, 1, up);
-    gfx_thumb(x + 24.0f, y, 16.0f, 0, down);
+    /* 押されている側は塗りつぶしにする (本家と同じ) */
+    int liked = (g_info->rating == RATE_LIKE);
+    int disliked = (g_info->rating == RATE_DISLIKE);
+    gfx_icon(liked ? ICON_THUMB_UP_FILL : ICON_THUMB_UP,
+             x, y, 18.0f, liked ? C_TEXT : C_DIM);
+    gfx_icon(disliked ? ICON_THUMB_DOWN_FILL : ICON_THUMB_DOWN,
+             x + 26.0f, y, 18.0f, disliked ? C_TEXT : C_DIM);
 }
 
 /* 「その他」メニュー。画面下から出るシート状の見た目にする */
@@ -1661,13 +1664,21 @@ static void draw_player_menu(void)
     snprintf(mode, sizeof(mode), "再生モード: %s", ml[0] ? ml : "通常");
 
     const char *items[MENU_ITEMS] = { mode, "この曲からラジオ", timer };
+    IconId icons[MENU_ITEMS] = {
+        (g_play_mode == PLAY_MODE_SHUFFLE)    ? ICON_SHUFFLE :
+        (g_play_mode == PLAY_MODE_REPEAT_ONE) ? ICON_REPEAT_ONE : ICON_REPEAT,
+        ICON_RADIO,
+        ICON_BEDTIME,
+    };
     for (int i = 0; i < MENU_ITEMS; i++) {
         int y = top + 22 + i * 24;
+        unsigned int col = (i == g_menu_sel) ? C_TEXT : C_DIM;
         if (i == g_menu_sel) {
             draw_rect(16, y - 14, SCR_W - 32, 22, C_SEL_BG);
             draw_rect(16, y - 14, 3, 22, C_ACCENT);
         }
-        text(30, y, (i == g_menu_sel) ? C_TEXT : C_DIM, 0.68f, items[i]);
+        gfx_icon(icons[i], 28, y - 13, 18.0f, col);
+        text(54, y, col, 0.68f, items[i]);
     }
 }
 
@@ -1870,12 +1881,15 @@ static Screen screen_player_tick(void)
 
         draw_rating(SCR_W - 76, 96);
 
+        /* 再生中か一時停止かはアイコンで示す (本家のプレイヤーと同じ) */
+        if (st == PLAYER_PLAYING || st == PLAYER_PAUSED)
+            gfx_icon(st == PLAYER_PAUSED ? ICON_PLAY_ARROW : ICON_PAUSE,
+                     tx, 120, 18.0f, C_TEXT);
         const char *st_label =
             (st == PLAYER_BUFFERING) ? "バッファリング中..." :
-            (st == PLAYER_PAUSED)    ? "一時停止" :
-            (st == PLAYER_ERROR)     ? "エラー" :
-            (st == PLAYER_PLAYING)   ? "再生中" : "";
-        text(tx, 132, (st == PLAYER_ERROR) ? C_ACCENT : C_DIM, 0.62f, st_label);
+            (st == PLAYER_ERROR)     ? "エラー" : "";
+        text(st_label[0] ? tx : tx + 26, 132,
+             (st == PLAYER_ERROR) ? C_ACCENT : C_DIM, 0.62f, st_label);
         const char *mode_label = play_mode_label();
         if (mode_label[0]) {
             float mode_x = tx;

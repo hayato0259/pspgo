@@ -38,11 +38,9 @@ static char g_dump_req[32] = "";
 #define LOGO_SIDE 32
 #define GLOW_SIDE 64
 #define CARD_TEX_SIDE 64
-#define THUMB_SIDE 32
 static unsigned int g_logo[LOGO_SIDE * LOGO_SIDE] __attribute__((aligned(16)));
 static unsigned int g_glow[GLOW_SIDE * GLOW_SIDE] __attribute__((aligned(16)));
 static unsigned int g_card[CARD_TEX_SIDE * CARD_TEX_SIDE] __attribute__((aligned(16)));
-static unsigned int g_thumb[THUMB_SIDE * THUMB_SIDE] __attribute__((aligned(16)));
 
 static float clamp01(float v)
 {
@@ -51,47 +49,11 @@ static float clamp01(float v)
     return v;
 }
 
-/* 角丸の箱までの距離。0 未満が内側 */
-static float box_dist(float px, float py, float cx, float cy,
-                      float hx, float hy, float r)
-{
-    float dx = fabsf(px - cx) - (hx - r);
-    float dy = fabsf(py - cy) - (hy - r);
-    float ax = dx > 0.0f ? dx : 0.0f;
-    float ay = dy > 0.0f ? dy : 0.0f;
-    float outside = sqrtf(ax * ax + ay * ay);
-    float inside = (dx > dy ? dx : dy);
-    if (inside > 0.0f)
-        inside = 0.0f;
-    return outside + inside - r;
-}
-
-/*
- * 高評価・低評価の親指。
- * 握りこぶし・立てた親指・袖の 3 つの角丸の箱を重ねて作る。
- * 画像を持たずに起動時に生成するのは、ロゴや光彩と同じ方針。
- */
-static void make_thumb_texture(void)
-{
-    for (int y = 0; y < THUMB_SIDE; y++) {
-        for (int x = 0; x < THUMB_SIDE; x++) {
-            float px = (float)x + 0.5f, py = (float)y + 0.5f;
-            float fist = box_dist(px, py, 19.0f, 20.0f, 9.0f, 8.0f, 3.5f);
-            float thumb = box_dist(px, py, 12.5f, 11.0f, 3.5f, 7.0f, 3.0f);
-            float cuff = box_dist(px, py, 6.0f, 22.0f, 4.0f, 6.0f, 1.5f);
-            float d = fist;
-            if (thumb < d) d = thumb;
-            if (cuff < d) d = cuff;
-            float a = clamp01(0.5f - d);          /* 1px ぶんなだらかに減衰 */
-            unsigned int alpha = (unsigned int)(a * 255.0f);
-            g_thumb[y * THUMB_SIDE + x] = (alpha << 24) | 0x00FFFFFF;
-        }
-    }
-}
+static void make_icon_textures(void);
 
 static void make_ui_textures(void)
 {
-    make_thumb_texture();
+    make_icon_textures();
     /*
      * ロゴ: 中心 (15.5,15.5)、円の半径 13.5、白いリングは半径 8.0 (太さ 2.2)。
      * 各要素は距離関数で 1px ぶんなだらかに減衰させてアンチエイリアスする。
@@ -443,14 +405,25 @@ void gfx_card_fill(float x, float y, float size, unsigned int color)
     blit_tex(g_card, CARD_TEX_SIDE, x, y, size, size, color);
 }
 
-void gfx_thumb(float x, float y, float size, int up, unsigned int color)
+/*
+ * アイコンは不透明度だけを持っているので、描けるように RGBA へ広げておく。
+ * 起動時に一度だけ行う (毎フレーム変換すると無駄が出る)。
+ */
+static unsigned int g_icon_tex[ICON_COUNT][ICON_SIDE * ICON_SIDE]
+    __attribute__((aligned(16)));
+
+static void make_icon_textures(void)
 {
-    /* 下向きは同じ絵を 180 度回して使う (テクスチャを2枚持たない)。
-       上下だけ反転すると親指の向きが本家と逆になる */
-    if (up)
-        blit_tex(g_thumb, THUMB_SIDE, x, y, size, size, color);
-    else
-        blit_tex(g_thumb, THUMB_SIDE, x + size, y + size, -size, -size, color);
+    for (int i = 0; i < ICON_COUNT; i++)
+        for (int p = 0; p < ICON_SIDE * ICON_SIDE; p++)
+            g_icon_tex[i][p] = ((unsigned int)icon_alpha[i][p] << 24) | 0x00FFFFFF;
+}
+
+void gfx_icon(IconId id, float x, float y, float size, unsigned int color)
+{
+    if (id < 0 || id >= ICON_COUNT)
+        return;
+    blit_tex(g_icon_tex[id], ICON_SIDE, x, y, size, size, color);
 }
 
 /* --- テキスト ------------------------------------------------------------ */
