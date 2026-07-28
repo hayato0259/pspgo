@@ -1284,7 +1284,6 @@ static void draw_song_video_toggle(float x, float y)
         text(cx + 9.0f, y, selected ? C_BG : C_DIM, size, label[i]);
         cx += w + 4.0f;
     }
-    text(cx + 6.0f, y, C_DIM, 0.55f, "○: 切替");
 }
 
 /* --- プレイリスト --- */
@@ -1557,11 +1556,6 @@ static void video_overlay(const ApiTrack *t, PlayerState st)
     if (st == PLAYER_BUFFERING)
         text(SCR_W - 120, SCR_H - 24, C_DIM, 0.55f, "バッファリング中...");
 
-    /* 再生し始めのあいだだけ通信量を出す。
-       外出先で気付かずに使い続けると通信量が大きいため */
-    if (video_frames() < 24 * 8)
-        text(SCR_W - 122, 17, C_DIM, 0.5f, "通信量 約200MB/時");
-
     draw_song_video_toggle(150, SCR_H - 22);
 }
 
@@ -1678,7 +1672,7 @@ static Screen screen_player_tick(void)
     ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
     ui_frame_begin();
     ui_chrome("再生中",
-              "↑: 歌詞  ↓: タイマー  △: 一時停止  □: ラジオ  L/R: 前後  SELECT: 再生モード  ×: 一覧",
+              "↑: 歌詞  ↓: タイマー  △: 一時停止  ○: 曲/動画  □: ラジオ  L/R: 前後  SELECT: 再生モード  ×: 一覧",
               g_auth, g_account);
     if (t) {
         /* 左に大きなアートワーク (柔らかい影のみ、枠なし)、右に曲情報 */
