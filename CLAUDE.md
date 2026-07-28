@@ -77,6 +77,9 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
   加えて不特定多数向けの YouTube 配信プロキシは規約・アカウント停止リスクが大きい
 - PSP クライアントの接続先は **EBOOT と同じフォルダの `server.txt`** で実行時に決まる
   (無ければ 127.0.0.1 = PPSSPP 開発用)。ビルド済み EBOOT の配布はこれで成立する
+- **YouTube 経路のサーバーは住宅回線に置く。** データセンターの IP は
+  「ボットではないことを確認」で弾かれ yt-dlp が失敗する。Raspberry Pi への移設手順は
+  [apps/youtube-music/docs/raspberry-pi-server.md](apps/youtube-music/docs/raspberry-pi-server.md)
 - タグ `v*` を push すると GitHub Actions (pspdev/pspdev コンテナ) が
   EBOOT.PBP をビルドして Release に添付する
 

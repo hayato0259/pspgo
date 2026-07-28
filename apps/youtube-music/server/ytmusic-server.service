@@ -1,0 +1,27 @@
+# youtube-music 配信サーバーを Raspberry Pi 等で常駐させる systemd ユニット。
+# 導入手順は docs/raspberry-pi-server.md を参照。
+#   sudo cp ytmusic-server.service /etc/systemd/system/
+#   sudo systemctl enable --now ytmusic-server
+# ユーザー名・パスが違う環境では書き換えること (既定は pi ユーザー / ~/pspgo)。
+[Unit]
+Description=youtube-music streaming proxy for PSP
+Documentation=https://github.com/hayato0259/pspgo
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=pi
+WorkingDirectory=/home/pi/pspgo/apps/youtube-music/server
+# venv の bin を先頭に置き、apt の古い yt-dlp ではなく venv 側を使わせる
+Environment=PATH=/home/pi/pspgo/apps/youtube-music/server/.venv/bin:/usr/local/bin:/usr/bin:/bin
+ExecStart=/home/pi/pspgo/apps/youtube-music/server/.venv/bin/python app.py 8080
+Restart=always
+RestartSec=5
+# RAM 1GB の Pi 3 で暴走したときに OS 全体を巻き込まないための上限
+MemoryMax=600M
+# 変換より対話操作 (SSH 等) を優先させる
+Nice=5
+
+[Install]
+WantedBy=multi-user.target

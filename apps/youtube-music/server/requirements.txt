@@ -1,5 +1,10 @@
 # pip install -r requirements.txt
-# 別途、コマンドとして ffmpeg と yt-dlp が必要 (macOS: brew install ffmpeg yt-dlp)
+# 別途、コマンドとして ffmpeg が必要 (macOS: brew install ffmpeg / Debian: apt install ffmpeg)
 ytmusicapi>=1.7
 qrcode>=7
 Pillow>=10
+# yt-dlp は PATH 上のコマンドとして呼ぶが、venv にも入れておく。
+# Linux の apt/dnf 版は古く、YouTube 側の変更で壊れるため
+# (Raspberry Pi では systemd の PATH を venv 優先にして使う。
+#  docs/raspberry-pi-server.md 参照)
+yt-dlp>=2025.6

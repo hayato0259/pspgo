@@ -177,6 +177,12 @@ cd server
    ポート省略時は 8080。ホスト名は不可（IP アドレスのみ）。
    `server.txt` が無い場合は 127.0.0.1（PPSSPP 開発用）に接続する。
 
+## サーバーを常時稼働マシンに置く
+
+Mac を開いておかなくて済むよう、Raspberry Pi 等へ載せ替えられる。
+**Raspberry Pi 3 でも性能は足りる。** 手順・systemd 設定・性能の実測方法は
+[docs/raspberry-pi-server.md](docs/raspberry-pi-server.md) を参照。
+
 ## サーバーの起動（詳細）
 
 ### マイミックスを表示したい場合はブラウザ認証を使う
