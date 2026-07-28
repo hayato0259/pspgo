@@ -231,14 +231,16 @@ static int g_menu_sel = 0;
  * 下は上から順に シークバー → ボタン → キュー で、この 3 つを上下で行き来する。
  *
  * ボタンの並びはテレビ版から「チャンネル情報・コメント・Gemini」を抜いたもの。
- * PSP には物理ボタンがあるので、左に曲そのものへの操作、右に再生の操作を寄せる。
+ * 左に再生の操作、右に曲そのものへの操作を寄せる。
+ * 「画質」は映像を流しているときにしか意味がないので、
+ * 音だけで聴いているときは設定のボタンごと出さない。
  */
 typedef enum {
-    BTN_LIKE = 0, BTN_DISLIKE, BTN_SAVE, BTN_VIEW, BTN_SETTINGS,  /* 左寄せ */
-    BTN_PREV, BTN_PLAY, BTN_NEXT,                                 /* 右寄せ */
+    BTN_PREV = 0, BTN_PLAY, BTN_NEXT,                        /* 左寄せ */
+    BTN_LIKE, BTN_DISLIKE, BTN_SAVE, BTN_VIEW, BTN_SETTINGS, /* 右寄せ */
     BTN_COUNT
 } PlayerBtn;
-#define BTN_RIGHT_FIRST BTN_PREV
+#define BTN_RIGHT_FIRST BTN_LIKE
 
 typedef enum { ZONE_SEEK = 0, ZONE_BUTTONS, ZONE_QUEUE } PanelZone;
 
@@ -264,6 +266,13 @@ static int g_sheet = SHEET_NONE;
 static int g_sheet_sel = 0;
 static int g_low_quality = 0;         /* 画質: 0=標準 1=低 */
 static int g_save_error_frames = 0;   /* 保存に失敗した旨の表示時間 */
+
+/*
+ * パネルの出入りのアニメーション。
+ * 0=閉じている 1=開ききっている。アートワークはこの値で
+ * 大きさと位置を補間し、上へ滑らかに移動する。
+ */
+static float g_panel_t = 0.0f;
 
 /* 動画版を再生しているときだけ映像も受け取る。
    曲版に戻ったり別の画面へ移ったら止める (通信と Media Engine を無駄に使わない) */
@@ -1822,20 +1831,52 @@ static void draw_player_menu(void)
 
 /* --- 操作パネル (十字キーの上下で出す) ----------------------------------- */
 
-/* ボタン 1 つ。選んでいるものは白い丸で塗る (テレビ版と同じ) */
-static void panel_button(int index, float x, IconId icon)
+/*
+ * パネルの出入りに合わせて色を薄くする。
+ * 座標だけ動かして色をそのままにすると、閉じ際に文字が居座って見える。
+ */
+static unsigned int panel_fade(unsigned int color)
 {
-    int focused = (g_panel_zone == ZONE_BUTTONS && g_panel_btn == index &&
+    unsigned int a = (unsigned int)((float)((color >> 24) & 0xFF) * g_panel_t);
+    return (color & 0x00FFFFFF) | (a << 24);
+}
+
+/* 下からせり上がる量。開ききると 0 になる */
+static float panel_rise(void)
+{
+    return (1.0f - g_panel_t) * 24.0f;
+}
+
+/*
+ * いま出ているボタンを左から順に並べて個数を返す。
+ * 「画質」は映像を流しているときにしか意味がないので、
+ * 音だけのときは設定のボタンを出さない (押せるのに何も無い状態を作らない)。
+ */
+static int panel_button_list(PlayerBtn *out)
+{
+    int n = 0;
+    for (int i = 0; i < BTN_COUNT; i++) {
+        if (i == BTN_SETTINGS && !g_video_for[0])
+            continue;
+        out[n++] = (PlayerBtn)i;
+    }
+    return n;
+}
+
+/* ボタン 1 つ。選んでいるものは白い丸で塗る (テレビ版と同じ) */
+static void panel_button(PlayerBtn id, float x, float y, IconId icon)
+{
+    int focused = (g_panel_zone == ZONE_BUTTONS && g_panel_btn == (int)id &&
                    g_sheet == SHEET_NONE);
-    gfx_circle_fill(x, PANEL_BTN_Y, PANEL_BTN,
-                    focused ? 0xFFFFFFFF : 0x66000000);
-    gfx_icon(icon, x + 3.0f, PANEL_BTN_Y + 3.0f, PANEL_BTN - 6.0f,
-             focused ? C_BG : C_TEXT);
+    gfx_circle_fill(x, y, PANEL_BTN,
+                    panel_fade(focused ? 0xFFFFFFFF : 0x66000000));
+    gfx_icon(icon, x + 3.0f, y + 3.0f, PANEL_BTN - 6.0f,
+             panel_fade(focused ? C_BG : C_TEXT));
 }
 
 /*
  * ボタンの並び。テレビ版から「チャンネル情報・コメント・Gemini」を抜き、
- * 曲そのものへの操作を左端、再生の操作を右端に寄せる。
+ * 再生の操作を左端、曲そのものへの操作を右端に寄せる。
  */
 static void draw_panel_buttons(PlayerState st)
 {
@@ -1843,21 +1884,35 @@ static void draw_panel_buttons(PlayerState st)
     int disliked = (g_info && g_info->rating == RATE_DISLIKE);
     int saved    = (g_info && g_info->in_library);
     const IconId icons[BTN_COUNT] = {
+        ICON_SKIP_PREVIOUS,
+        (st == PLAYER_PLAYING) ? ICON_PAUSE : ICON_PLAY_ARROW,
+        ICON_SKIP_NEXT,
         liked    ? ICON_THUMB_UP_FILL   : ICON_THUMB_UP,
         disliked ? ICON_THUMB_DOWN_FILL : ICON_THUMB_DOWN,
         saved    ? ICON_BOOKMARK_FILL   : ICON_BOOKMARK,
         ICON_SMART_DISPLAY,
         ICON_SETTINGS,
-        ICON_SKIP_PREVIOUS,
-        (st == PLAYER_PLAYING) ? ICON_PAUSE : ICON_PLAY_ARROW,
-        ICON_SKIP_NEXT,
     };
-    for (int i = 0; i < BTN_COUNT; i++) {
-        float x = (i < BTN_RIGHT_FIRST)
-            ? (float)(MARGIN + i * PANEL_BTN_STEP)
-            : (float)(SCR_W - MARGIN - PANEL_BTN -
-                      (BTN_COUNT - 1 - i) * PANEL_BTN_STEP);
-        panel_button(i, x, icons[i]);
+
+    PlayerBtn list[BTN_COUNT];
+    int n = panel_button_list(list);
+    int right = 0;                       /* 右寄せの個数 */
+    for (int i = 0; i < n; i++)
+        if (list[i] >= BTN_RIGHT_FIRST)
+            right++;
+
+    float y = (float)PANEL_BTN_Y + panel_rise();
+    int ri = 0;
+    for (int i = 0; i < n; i++) {
+        float x;
+        if (list[i] < BTN_RIGHT_FIRST) {
+            x = (float)(MARGIN + i * PANEL_BTN_STEP);
+        } else {
+            x = (float)(SCR_W - MARGIN - PANEL_BTN -
+                        (right - 1 - ri) * PANEL_BTN_STEP);
+            ri++;
+        }
+        panel_button(list[i], x, y, icons[list[i]]);
     }
 }
 
@@ -1865,26 +1920,28 @@ static void draw_panel_buttons(PlayerState st)
 static void draw_panel_seek(const ApiTrack *t)
 {
     int elapsed = display_elapsed_sec();
+    int rise = (int)panel_rise();
     char buf[16];
     snprintf(buf, sizeof(buf), "%d:%02d", elapsed / 60, elapsed % 60);
-    text(MARGIN, PANEL_TIME_Y, C_DIM, 0.5f, buf);
+    text(MARGIN, PANEL_TIME_Y + rise, panel_fade(C_DIM), 0.5f, buf);
     if (t->duration_sec > 0) {
         snprintf(buf, sizeof(buf), "%d:%02d",
                  t->duration_sec / 60, t->duration_sec % 60);
         text((float)(SCR_W - MARGIN) - gfx_text_width(0.5f, buf),
-             PANEL_TIME_Y, C_DIM, 0.5f, buf);
+             PANEL_TIME_Y + rise, panel_fade(C_DIM), 0.5f, buf);
     }
 
     int w = SCR_W - MARGIN * 2;
-    draw_rect(MARGIN, PANEL_BAR_Y, w, 2, 0x66FFFFFF);
+    int y = PANEL_BAR_Y + rise;
+    draw_rect(MARGIN, y, w, 2, panel_fade(0x66FFFFFF));
     if (t->duration_sec <= 0)
         return;
     int done = w * elapsed / t->duration_sec;
     if (done > w) done = w;
-    draw_rect(MARGIN, PANEL_BAR_Y, done, 2, C_TEXT);
+    draw_rect(MARGIN, y, done, 2, panel_fade(C_TEXT));
     if (g_panel_zone == ZONE_SEEK && g_sheet == SHEET_NONE)
-        gfx_circle_fill((float)(MARGIN + done) - 5.0f,
-                        PANEL_BAR_Y - 4.0f, 10.0f, 0xFFFFFFFF);
+        gfx_circle_fill((float)(MARGIN + done) - 5.0f, (float)y - 4.0f,
+                        10.0f, panel_fade(0xFFFFFFFF));
 }
 
 /* キュー。再生中の曲を中央付近に置き、左右で選ぶと そこへ飛ぶ */
@@ -1898,14 +1955,16 @@ static void draw_panel_queue(void)
     if (first > g_track_count - visible) first = g_track_count - visible;
     if (first < 0) first = 0;
 
+    float y = (float)PANEL_Q_Y + panel_rise();
     for (int i = 0; i < visible && first + i < g_track_count; i++) {
         int idx = first + i;
         float x = (float)(MARGIN + i * PANEL_Q_STEP);
         if (g_panel_zone == ZONE_QUEUE && g_sheet == SHEET_NONE &&
             idx == g_queue_sel)
-            gfx_glow(x, PANEL_Q_Y, PANEL_Q, PANEL_Q, 150);
-        art_draw_ex(g_tracks[idx].video_id, x, PANEL_Q_Y, PANEL_Q,
-                    (idx == g_playing_index) ? 0xFFFFFFFF : C_CARD_DIM);
+            gfx_glow(x, y, PANEL_Q, PANEL_Q, (int)(150.0f * g_panel_t));
+        art_draw_ex(g_tracks[idx].video_id, x, y, PANEL_Q,
+                    panel_fade((idx == g_playing_index) ? 0xFFFFFFFF
+                                                        : C_CARD_DIM));
     }
 }
 
@@ -1916,13 +1975,14 @@ static void draw_panel_header(const ApiTrack *t, unsigned int frames,
                               const char *note, unsigned int note_color)
 {
     const int w = SCR_W - MARGIN * 2;
-    marquee_line(MARGIN, PANEL_TITLE_Y, w, C_TEXT, 0.78f, t->title, 1, 0,
-                 frames);
+    marquee_line(MARGIN, PANEL_TITLE_Y, w, panel_fade(C_TEXT), 0.78f,
+                 t->title, 1, 0, frames);
 
     /* 2 行目はアーティスト・アルバム・再生回数。
        一時的なお知らせがあるときは、この行を明け渡す */
     if (note && note[0]) {
-        text_clipped(MARGIN, PANEL_SUB_Y, w, note_color, 0.55f, note);
+        text_clipped(MARGIN, PANEL_SUB_Y, w, panel_fade(note_color), 0.55f,
+                     note);
         return;
     }
     char sub[224];
@@ -1932,12 +1992,14 @@ static void draw_panel_header(const ApiTrack *t, unsigned int frames,
         append_meta(sub, sizeof(sub), g_info->album);
         append_meta(sub, sizeof(sub), g_info->views);
     }
-    marquee_line(MARGIN, PANEL_SUB_Y, w, C_DIM, 0.55f, sub, 0, 0, frames);
+    marquee_line(MARGIN, PANEL_SUB_Y, w, panel_fade(C_DIM), 0.55f, sub, 0, 0,
+                 frames);
 }
 
 /*
- * パネル一式。over_video が真なら映像の上に重ねるので、
- * アートワークは描かない (映像そのものが主役になる)。
+ * パネル一式 (アートワーク以外)。
+ * アートワークは開閉に合わせて位置と大きさを補間するので、呼び出し元で描く。
+ * over_video が真なら映像の上に重ねる。
  */
 static void draw_panel(const ApiTrack *t, PlayerState st,
                        const char *note, unsigned int note_color,
@@ -1945,15 +2007,11 @@ static void draw_panel(const ApiTrack *t, PlayerState st,
 {
     if (over_video) {
         /* 映像の上では文字が沈むので、上下だけ暗くする */
-        draw_vgrad(0, 0, SCR_W, 64, 0xC8000000, 0x00000000);
-        draw_vgrad(0, SCR_H - 130, SCR_W, 130, 0x00000000, 0xD8000000);
+        draw_vgrad(0, 0, SCR_W, 64, panel_fade(0xC8000000), 0x00000000);
+        draw_vgrad(0, SCR_H - 130, SCR_W, 130, 0x00000000,
+                   panel_fade(0xD8000000));
     }
     draw_panel_header(t, g_mq_frames, note, note_color);
-    if (!over_video) {
-        const float ax = ((float)SCR_W - PANEL_ART) / 2.0f;
-        gfx_shadow(ax, PANEL_ART_Y, PANEL_ART, PANEL_ART, 0x90);
-        art_draw_ex(t->video_id, ax, PANEL_ART_Y, PANEL_ART, 0xFFFFFFFF);
-    }
     draw_panel_seek(t);
     draw_panel_buttons(st);
     draw_panel_queue();
@@ -2163,8 +2221,15 @@ static Screen screen_player_tick(void)
                 snd_play(SND_MOVE);
                 seek_by(d * 10);
             } else if (g_panel_zone == ZONE_BUTTONS) {
+                /* いま出ているボタンの中だけを回る (設定は映像のときだけ出る) */
+                PlayerBtn list[BTN_COUNT];
+                int n = panel_button_list(list);
+                int at = 0;
+                for (int i = 0; i < n; i++)
+                    if (list[i] == g_panel_btn)
+                        at = i;
                 snd_play(SND_MOVE);
-                g_panel_btn = (g_panel_btn + BTN_COUNT + d) % BTN_COUNT;
+                g_panel_btn = list[(at + n + d) % n];
             } else if (g_queue_sel + d >= 0 && g_queue_sel + d < g_track_count) {
                 snd_play(SND_MOVE);
                 g_queue_sel += d;
@@ -2252,6 +2317,17 @@ static Screen screen_player_tick(void)
 
     ApiTrack *t = (g_playing_index >= 0) ? &g_tracks[g_playing_index] : NULL;
 
+    /* パネルの出入り。閉じたまま何もしないフレームでも進める */
+    {
+        float want = g_panel_open ? 1.0f : 0.0f;
+        g_panel_t += (want - g_panel_t) * 0.22f;
+        if (g_panel_t > 0.999f) g_panel_t = 1.0f;
+        if (g_panel_t < 0.001f) g_panel_t = 0.0f;
+        /* 映像を止めると設定のボタンが消える。そこに居たら戻す */
+        if (g_panel_btn == BTN_SETTINGS && !g_video_for[0])
+            g_panel_btn = BTN_PLAY;
+    }
+
     /* 流れる題名の位置。曲が変わったら先頭に戻す */
     {
         static char mq_id[24] = "";
@@ -2277,7 +2353,7 @@ static Screen screen_player_tick(void)
         video_decode(gfx_draw_buffer()) == 1) {
         gfx_frame_begin_keep();
         /* パネルを出しているなら映像の上に重ねる (本家も映像を消さない) */
-        if (g_panel_open && t)
+        if (g_panel_t > 0.0f && t)
             draw_panel(t, st, NULL, C_DIM, 1);
         else
             video_overlay(t, st);
@@ -2336,23 +2412,32 @@ static Screen screen_player_tick(void)
                          player_last_error());
         }
 
-        if (g_panel_open) {
-            draw_panel(t, st, note, note_color, 0);
-        } else {
-            const float ax = ((float)SCR_W - PLAY_ART) / 2.0f;
-            gfx_shadow(ax, PLAY_ART_Y, PLAY_ART, PLAY_ART, 0x90);
-            art_draw_ex(t->video_id, ax, PLAY_ART_Y, PLAY_ART, 0xFFFFFFFF);
+        /*
+         * アートワークは開閉に合わせて上へ滑り、同時に小さくなる。
+         * 題名とアーティストは中央 (閉) と左上 (開) で入れ替わるので、
+         * 濃さで交差させる。
+         */
+        const float tt = g_panel_t;
+        float size = PLAY_ART + (PANEL_ART - PLAY_ART) * tt;
+        float ay = PLAY_ART_Y + (PANEL_ART_Y - PLAY_ART_Y) * tt;
+        float ax = ((float)SCR_W - size) / 2.0f;
+        gfx_shadow(ax, ay, size, size, (int)(0x90 * (1.0f - tt * 0.2f)));
+        art_draw_ex(t->video_id, ax, ay, size, 0xFFFFFFFF);
 
+        if (tt < 1.0f) {
+            unsigned int a = (unsigned int)(255.0f * (1.0f - tt)) << 24;
             marquee_line(((float)SCR_W - PLAY_TEXT_W) / 2.0f, PLAY_TITLE_Y,
-                         PLAY_TEXT_W, C_TEXT, 0.85f, t->title, 1, 1,
-                         g_mq_frames);
+                         PLAY_TEXT_W, a | (C_TEXT & 0x00FFFFFF), 0.85f,
+                         t->title, 1, 1, g_mq_frames);
             marquee_line(((float)SCR_W - PLAY_TEXT_W) / 2.0f, PLAY_ARTIST_Y,
-                         PLAY_TEXT_W, C_DIM, 0.62f, t->artist, 0, 1,
-                         g_mq_frames);
+                         PLAY_TEXT_W, a | (C_DIM & 0x00FFFFFF), 0.62f,
+                         t->artist, 0, 1, g_mq_frames);
             if (note[0])
                 text(((float)SCR_W - gfx_text_width(0.58f, note)) / 2.0f,
-                     PLAY_NOTE_Y, note_color, 0.58f, note);
+                     PLAY_NOTE_Y, a | (note_color & 0x00FFFFFF), 0.58f, note);
         }
+        if (tt > 0.0f)
+            draw_panel(t, st, note, note_color, 0);
     } else {
         const char *msg = "再生していません";
         text(((float)SCR_W - gfx_text_width(0.7f, msg)) / 2.0f, 140,
