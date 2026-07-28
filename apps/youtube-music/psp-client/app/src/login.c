@@ -55,10 +55,19 @@ static void set_failed(const char *msg)
 static int login_thread(SceSize args, void *argp)
 {
     char tmp[128];
+    char start_path[96], poll_path[96];
+
+    if (net_build_path(start_path, sizeof(start_path),
+                       "/api/login/start") < 0 ||
+        net_build_path(poll_path, sizeof(poll_path),
+                       "/api/login/poll") < 0) {
+        set_failed("リクエストの作成に失敗しました");
+        return 0;
+    }
 
     /* 1. デバイスコードを取得 */
     g_state = LOGIN_REQUESTING;
-    int len = http_get(net_server_host(), net_server_port(), "/api/login/start",
+    int len = http_get(net_server_host(), net_server_port(), start_path,
                        g_buf, sizeof(g_buf));
     if (len < 0) {
         set_failed("サーバーに接続できません");
@@ -99,7 +108,7 @@ static int login_thread(SceSize args, void *argp)
         if (g_cancel)
             break;
 
-        len = http_get(net_server_host(), net_server_port(), "/api/login/poll",
+        len = http_get(net_server_host(), net_server_port(), poll_path,
                        g_buf, sizeof(g_buf));
         if (len < 0)
             continue; /* 一時的な通信失敗は待って再試行 */

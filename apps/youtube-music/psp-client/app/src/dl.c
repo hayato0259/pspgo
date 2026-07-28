@@ -48,8 +48,10 @@ static void save_art(const char *id)
         return;
     }
 
-    char req[128];
-    snprintf(req, sizeof(req), "/art?id=%s&s=%d", id, ART_SIDE);
+    char base_req[128], req[256];
+    snprintf(base_req, sizeof(base_req), "/art?id=%s&s=%d", id, ART_SIDE);
+    if (net_build_path(req, sizeof(req), base_req) < 0)
+        return;
     int got = http_get_bin(net_server_host(), net_server_port(), req,
                            g_art, sizeof(g_art));
     if (got != ART_SIDE * ART_SIDE * 4)
@@ -65,10 +67,12 @@ static void save_art(const char *id)
 /* 戻り値: 保存したバイト数 / <=0 失敗 */
 static int save_mp3(const ApiTrack *t, char *final_path, int final_size)
 {
-    char part[128], req[128];
+    char part[128], base_req[128], req[256];
     store_mp3_path(t->video_id, final_path, final_size);
     snprintf(part, sizeof(part), "offline/%s.part", t->video_id);
-    snprintf(req, sizeof(req), "/stream?yt=%s", t->video_id);
+    snprintf(base_req, sizeof(base_req), "/stream?yt=%s", t->video_id);
+    if (net_build_path(req, sizeof(req), base_req) < 0)
+        return -1;
 
     int sock = http_open_stream(net_server_host(), net_server_port(), req);
     if (sock < 0)

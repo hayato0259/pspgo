@@ -27,8 +27,10 @@ auth/oauth_client.json に client_id / client_secret を置く (README 参照)�
 使い方: .venv/bin/python app.py [port]   (デフォルト 8080)
 """
 
+import hmac
 import json
 import os
+import re
 import shutil
 import subprocess
 import sys
@@ -55,6 +57,7 @@ AUTH_DIR = Path(__file__).parent / "auth"
 CLIENT_FILE = AUTH_DIR / "oauth_client.json"   # client_id / client_secret (自分で作る)
 TOKEN_FILE = AUTH_DIR / "oauth.json"           # ログイン後に自動生成されるトークン
 BROWSER_FILE = AUTH_DIR / "browser.json"       # 旧方式 (ブラウザヘッダ) も引き続き使える
+ACCESS_TOKEN_FILE = AUTH_DIR / "token.txt"     # 外部公開用の共有トークン
 
 _yt = None
 _yt_lock = threading.Lock()
@@ -504,11 +507,39 @@ def tsv_status() -> str:
     )
 
 
+def load_access_token():
+    """共有トークンを返す。ファイルが無い場合だけ認証を無効にする。"""
+    try:
+        return ACCESS_TOKEN_FILE.read_text(encoding="utf-8").strip()
+    except FileNotFoundError:
+        return None
+    except OSError as e:
+        # 読めない設定を「認証なし」と扱うと外部公開時に危険なので fail closed。
+        print(f"[server] auth/token.txt を読めません: {e}", file=sys.stderr)
+        return ""
+
+
 class Handler(BaseHTTPRequestHandler):
     protocol_version = "HTTP/1.0"
 
     def log_message(self, fmt, *args):
-        sys.stderr.write("[server] %s\n" % (fmt % args))
+        message = fmt % args
+        message = re.sub(r"([?&]k=)[^&\s\"]*", r"\1***", message)
+        sys.stderr.write(f"[server] {message}\n")
+        sys.stderr.flush()
+
+    @staticmethod
+    def _protected_path(path: str) -> bool:
+        return path.startswith("/api/") or path in ("/art", "/stream")
+
+    def _authorized(self, path: str, query: dict) -> bool:
+        if not self._protected_path(path):
+            return True
+        expected = load_access_token()
+        if expected is None:
+            return True
+        supplied = query.get("k", [""])[0]
+        return bool(expected) and hmac.compare_digest(supplied, expected)
 
     def _text(self, body: str, code: int = 200, ctype: str = "text/tab-separated-values"):
         data = body.encode("utf-8")
@@ -550,6 +581,10 @@ class Handler(BaseHTTPRequestHandler):
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
         q = urllib.parse.parse_qs(url.query)
+
+        if not self._authorized(url.path, q):
+            self._text("error\t認証が必要です\n", code=401)
+            return
 
         if url.path == "/api/lyrics" and "yt" in q:
             try:

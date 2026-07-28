@@ -17,6 +17,15 @@ static char g_error[160];      /* サーバーが返した error 行 */
 
 const char *api_last_error(void) { return g_error; }
 
+static int api_get(const char *path, char *buf, int bufsize)
+{
+    char request_path[896];
+    if (net_build_path(request_path, sizeof(request_path), path) < 0)
+        return -1;
+    return http_get(net_server_host(), net_server_port(), request_path,
+                    buf, bufsize);
+}
+
 /*
  * 受信本文にサーバーからの error 行が含まれていないか確認する。
  * PSP 側は HTTP ステータス行を読み飛ばしているため、
@@ -89,7 +98,7 @@ static int status_line(char **f, int nf, void *vctx)
 
 int api_status(char *name_out, int name_size, int *can_login_out)
 {
-    int len = http_get(net_server_host(), net_server_port(), "/api/status", g_buf, sizeof(g_buf));
+    int len = api_get("/api/status", g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
     struct status_ctx ctx = { 0, 0, name_out, name_size };
@@ -102,7 +111,7 @@ int api_status(char *name_out, int name_size, int *can_login_out)
 
 int api_logout(void)
 {
-    int len = http_get(net_server_host(), net_server_port(), "/api/logout", g_buf, sizeof(g_buf));
+    int len = api_get("/api/logout", g_buf, sizeof(g_buf));
     return (len < 0) ? len : 0;
 }
 
@@ -140,7 +149,7 @@ static int home_line(char **f, int nf, void *vctx)
 
 int api_home(ApiItem *items, int max)
 {
-    int len = http_get(net_server_host(), net_server_port(), "/api/home", g_buf, sizeof(g_buf));
+    int len = api_get("/api/home", g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
     if (has_server_error())
@@ -187,8 +196,7 @@ int api_search(const char *query_utf8, ApiItem *items, int max)
         return -1;
     snprintf(path, sizeof(path), "/api/search?q=%s", encoded);
 
-    int len = http_get(net_server_host(), net_server_port(), path,
-                       g_buf, sizeof(g_buf));
+    int len = api_get(path, g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
     if (has_server_error())
@@ -225,7 +233,7 @@ int api_playlist(const char *id, char *title_out, int title_size,
 {
     char path[160];
     snprintf(path, sizeof(path), "/api/playlist?id=%s", id);
-    int len = http_get(net_server_host(), net_server_port(), path, g_buf, sizeof(g_buf));
+    int len = api_get(path, g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
     if (has_server_error())
@@ -243,7 +251,7 @@ int api_radio(const char *video_id, char *title_out, int title_size,
 {
     char path[160];
     snprintf(path, sizeof(path), "/api/radio?yt=%s", video_id);
-    int len = http_get(net_server_host(), net_server_port(), path, g_buf, sizeof(g_buf));
+    int len = api_get(path, g_buf, sizeof(g_buf));
     if (len < 0)
         return len;
     if (has_server_error())
@@ -263,5 +271,5 @@ int api_lyrics(const char *video_id, char *buf, int bufsize)
         return -1;
     buf[0] = '\0';
     snprintf(path, sizeof(path), "/api/lyrics?yt=%s", video_id);
-    return http_get(net_server_host(), net_server_port(), path, buf, bufsize);
+    return api_get(path, buf, bufsize);
 }
