@@ -18,9 +18,18 @@ UPDATE_TIMER=/etc/systemd/system/ytmusic-ytdlp-update.timer
 echo "==> 環境: $(uname -m) / user=$SERVICE_USER / dir=$SERVER_DIR"
 
 # --- 依存パッケージ ---------------------------------------------------------
-echo "==> apt パッケージ"
-sudo apt-get update -qq
-sudo apt-get install -y -qq python3-venv ffmpeg curl
+# 揃っていれば apt を動かさない (sudo を求める回数と所要時間を減らすため)
+MISSING=()
+command -v ffmpeg >/dev/null || MISSING+=(ffmpeg)
+command -v curl   >/dev/null || MISSING+=(curl)
+python3 -c 'import venv, ensurepip' 2>/dev/null || MISSING+=(python3-venv)
+if (( ${#MISSING[@]} )); then
+    echo "==> apt で導入: ${MISSING[*]}"
+    sudo apt-get update -qq
+    sudo apt-get install -y -qq "${MISSING[@]}"
+else
+    echo "==> 依存パッケージは導入済み (apt は実行しない)"
+fi
 
 # --- Python 環境 (yt-dlp は apt ではなく venv に入れる) ---------------------
 echo "==> venv"
