@@ -111,6 +111,14 @@ $SERVICE_USER ALL=(root) NOPASSWD: /bin/systemctl restart ytmusic-server
 EOF
 sudo chmod 440 /etc/sudoers.d/ytmusic-restart
 
+# 手動で起動したままのプロセスがポートを掴んでいると systemd 側が bind できない
+HOLDER="$(ss -ltnpH "sport = :$PORT" 2>/dev/null | grep -o 'pid=[0-9]*' | head -1 | cut -d= -f2 || true)"
+if [[ -n "${HOLDER:-}" ]]; then
+    echo "==> ポート $PORT を掴んでいるプロセス($HOLDER)を停止"
+    kill "$HOLDER" 2>/dev/null || true
+    sleep 2
+fi
+
 sudo systemctl daemon-reload
 sudo systemctl enable -q --now ytmusic-server
 sudo systemctl enable -q --now ytmusic-ytdlp-update.timer
