@@ -165,6 +165,7 @@ static int decode_thread(SceSize args, void *argp)
     int eos = 0;
     int stall = 0;
     unsigned int total_rx = 0;
+    unsigned int last_rx = 0;   /* 直前に前進を確認した受信量 (供給停止の判定用) */
 
     while (!g_cmd_stop) {
         if (g_paused) {
@@ -211,15 +212,27 @@ static int decode_thread(SceSize args, void *argp)
                 break; /* データを出し切った */
             /*
              * 負値の大半は「まだデータが足りない」を意味するので待つ。
-             * ただし真のデコードエラーで無限ループにならないよう上限を設ける
-             * (16KB/s 以上で届いていれば数十回で必ず前に進む)。
+             * ただし真のデコードエラーで無限ループにならないよう上限を設ける。
+             *
+             * この上限は当初 2 秒だったが短すぎた: サーバー側は 1 曲ごとに
+             * yt-dlp を起動して変換するため、配信開始や曲の切り替わりで
+             * 数秒データが来ないことがある。さらに一括ダウンロードと
+             * 同時に再生すると回線を分け合うため間隔が伸びる。
+             * (Raspberry Pi 4 のサーバーで実際に 0x807F00FD で落ちた)
+             * 受信が続いている限りは待ち続け、本当に供給が止まった場合だけ
+             * 諦めるよう、受信バイト数が増えていれば待ち時間をリセットする。
              */
-            if (++stall > 400) /* 約2秒 */
+            if (total_rx != last_rx) {
+                last_rx = total_rx;   /* まだ届いている = 前に進める見込みあり */
+                stall = 0;
+            } else if (++stall > 4000) { /* 約20秒、無音のまま何も届かない */
                 return fail(sock, fp, handle, src_reserved, bytes);
+            }
             sceKernelDelayThread(5 * 1000);
             continue;
         }
         stall = 0;
+        last_rx = total_rx;
 
         /*
          * 終端検知。
