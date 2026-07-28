@@ -28,8 +28,11 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
 - エミュレータ: PPSSPP 1.20.4 (`/Applications/PPSSPPSDL.app`)。
   **EBOOT.PBP は絶対パスで渡す**（相対パスは umd0:/ 扱いで失敗する）
 - **youtube-music を PPSSPP で動かすときは `apps/youtube-music/run.sh` を使う。**
-  サーバー起動・ビルド・配置・PPSSPP 起動を 1 コマンドでやる
-  （`--demo` で AUTODEMO ビルド / `--no-server` / `--clean`）
+  ビルド・配置・PPSSPP 起動を 1 コマンドでやる
+  （`--demo` で AUTODEMO ビルド / `--clean`）
+  - **接続先は配置先の `server.txt` が決める。** ラズパイを向いていれば
+    Mac 側のサーバーは起動しない。サーバー側を直すときは `--local`、
+    戻すときは `--remote`（元の設定はトークンごと退避される）
 - PPSSPP のネットワークは `~/.config/ppsspp/PSP/SYSTEM/ppsspp.ini` の
   `[Network] EnableWLAN = True` が必要（設定済み）
 
