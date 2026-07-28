@@ -587,7 +587,7 @@ static void draw_splash(const char *status, int is_error)
     if (status && status[0]) {
         if (is_error) {
             /* エラーは長文になり得るので折り返して表示する */
-            intraFontSetStyle(gfx_font(), 0.7f, C_ACCENT, 0, 0.0f, 0);
+            intraFontSetStyle(gfx_font(), 0.7f, C_ACCENT, GFX_TEXT_SHADOW, 0.0f, 0);
             intraFontPrintColumn(gfx_font(), 56, 168, SCR_W - 112, status);
         } else {
             float sw = gfx_text_width(0.65f, status);
@@ -789,7 +789,7 @@ static Screen screen_login_tick(void)
             text(tx, 96, C_DIM, 0.65f, "読み取れない場合:");
             text(tx, 118, C_TEXT, 0.7f, login_url());
             text(tx, 142, C_DIM, 0.65f, "に、このコードを入力");
-            intraFontSetStyle(gfx_font(), 1.2f, C_TEXT, 0, 0.0f, 0);
+            intraFontSetStyle(gfx_font(), 1.2f, C_TEXT, GFX_TEXT_SHADOW, 0.0f, 0);
             intraFontPrint(gfx_font(), tx, 172, login_user_code());
         } else {
             /* QR が使えない場合はコードを大きく見せる */
@@ -798,7 +798,7 @@ static Screen screen_login_tick(void)
             text(56, 86, C_TEXT, 0.9f, login_url());
             text(40, 118, C_DIM, 0.75f, "そこに、このコードを入力してください:");
             draw_rect(56, 130, SCR_W - 112, 44, C_SEL_BG);
-            intraFontSetStyle(gfx_font(), 1.7f, C_TEXT, 0, 0.0f,
+            intraFontSetStyle(gfx_font(), 1.7f, C_TEXT, GFX_TEXT_SHADOW, 0.0f,
                               INTRAFONT_ALIGN_CENTER);
             intraFontPrint(gfx_font(), SCR_W / 2, 162, login_user_code());
         }
@@ -811,7 +811,7 @@ static Screen screen_login_tick(void)
         text(40, 238, C_DIM, 0.7f, rem);
     } else if (st == LOGIN_FAILED) {
         text(40, 110, C_ACCENT, 0.85f, "ログインに失敗しました");
-        intraFontSetStyle(gfx_font(), 0.7f, C_DIM, 0, 0.0f, 0);
+        intraFontSetStyle(gfx_font(), 0.7f, C_DIM, GFX_TEXT_SHADOW, 0.0f, 0);
         intraFontPrintColumn(gfx_font(), 40, 138, SCR_W - 80, login_message());
     }
     gfx_frame_end();
@@ -964,7 +964,7 @@ static Screen screen_home_tick(void)
     if (g_home_count == 0) {
         text(24, 90, C_ACCENT, 0.85f, "表示できる項目がありませんでした");
         if (g_error[0]) {
-            intraFontSetStyle(gfx_font(), 0.7f, C_DIM, 0, 0.0f, 0);
+            intraFontSetStyle(gfx_font(), 0.7f, C_DIM, GFX_TEXT_SHADOW, 0.0f, 0);
             intraFontPrintColumn(gfx_font(), 24, 118, SCR_W - 48, g_error);
         }
         text(24, 176, C_DIM, 0.7f, "サーバーのログを確認してください");
@@ -1268,7 +1268,7 @@ static Screen screen_search_tick(void)
     if (g_search_sel < 0) {
         text(24, 112, C_DIM, 0.8f, "見つかりませんでした");
         if (g_error[0]) {
-            intraFontSetStyle(gfx_font(), 0.65f, C_ACCENT, 0, 0.0f, 0);
+            intraFontSetStyle(gfx_font(), 0.65f, C_ACCENT, GFX_TEXT_SHADOW, 0.0f, 0);
             intraFontPrintColumn(gfx_font(), 24, 140, SCR_W - 48, g_error);
         }
     } else {
@@ -1874,9 +1874,9 @@ static Screen screen_player_tick(void)
         art_draw(t->video_id, 20, 48, 128);
 
         const int tx = 168;
-        intraFontSetStyle(gfx_font(), 0.88f, C_TEXT, 0, 0.0f, 0);
+        intraFontSetStyle(gfx_font(), 0.88f, C_TEXT, GFX_TEXT_SHADOW, 0.0f, 0);
         intraFontPrintColumn(gfx_font(), tx, 70, SCR_W - tx - 16, t->title);
-        intraFontSetStyle(gfx_font(), 0.62f, C_DIM, 0, 0.0f, 0);
+        intraFontSetStyle(gfx_font(), 0.62f, C_DIM, GFX_TEXT_SHADOW, 0.0f, 0);
         intraFontPrintColumn(gfx_font(), tx, 104, SCR_W - tx - 16, t->artist);
 
         draw_rating(SCR_W - 76, 96);

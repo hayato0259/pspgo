@@ -39,6 +39,12 @@ void *gfx_draw_buffer(void);
  */
 void gu_state_2d(void);
 
+/*
+ * 文字の影。本体のシステム画面と同じ見え方にするため既定で付ける。
+ * intraFont の関数を直接呼ぶ場所でも同じ値を渡すこと。
+ */
+#define GFX_TEXT_SHADOW 0x90000000
+
 /* 主フォント (jpn0.pgf)。intraFont の関数を直接使う画面向け */
 intraFont *gfx_font(void);
 

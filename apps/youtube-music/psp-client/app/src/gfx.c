@@ -428,9 +428,14 @@ void gfx_icon(IconId id, float x, float y, float size, unsigned int color)
 
 /* --- テキスト ------------------------------------------------------------ */
 
+/*
+ * 影の色は gfx.h の GFX_GFX_TEXT_SHADOW。本体のシステム画面 (終了確認など) の
+ * 文字には薄い影が付いており、明るい背景の上でも文字が沈まない。
+ * intraFont は影の色を引数で受け取るので、自前で二度描きする必要はない。
+ */
 void text(float x, float y, unsigned int color, float size, const char *s)
 {
-    intraFontSetStyle(g_font, size, color, 0, 0.0f, 0);
+    intraFontSetStyle(g_font, size, color, GFX_TEXT_SHADOW, 0.0f, 0);
     intraFontPrint(g_font, x, y, s);
 }
 
@@ -452,7 +457,7 @@ void text_clipped(float x, float y, int w, unsigned int color, float size,
 
 float gfx_text_width(float size, const char *s)
 {
-    intraFontSetStyle(g_font, size, 0xFFFFFFFF, 0, 0.0f, 0);
+    intraFontSetStyle(g_font, size, 0xFFFFFFFF, GFX_TEXT_SHADOW, 0.0f, 0);
     return intraFontMeasureText(g_font, s);
 }
 
