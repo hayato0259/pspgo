@@ -11,6 +11,8 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
   GET /api/playlist?id=<id>  内容:      meta\t<題> / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
   GET /api/radio?yt=<videoId> ラジオ:   meta\tラジオ / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
   GET /api/lyrics?yt=<videoId> 歌詞:    line\t<歌詞1行> / none\t1
+  GET /api/trackinfo?yt=<videoId> 再生中の曲: cur\tsong|video / like\t… / alt\t…
+  GET /api/rate?yt=<videoId>&r=like|dislike|none  高評価・低評価
   GET /api/login/start       ログイン開始: code\t<入力コード> / url\t<URL> / interval\t<秒>
   GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
   GET /api/logout            トークン破棄
@@ -634,38 +636,62 @@ def video_kind(video_type: str) -> str:
     return "song" if (video_type or "").endswith("ATV") else "video"
 
 
-def tsv_counterpart(video_id: str) -> str:
-    """曲版とミュージックビデオ版の対応を返す。
+def tsv_trackinfo(video_id: str) -> str:
+    """再生中の曲について、一度の問い合わせで分かることをまとめて返す。
 
-    YouTube Music の画面にある「曲 / 動画」の切り替えと同じもので、
-    同じ楽曲の別バージョンは別の動画として存在する。
-    ytmusicapi はこれを counterpart として返してくれる。
+      cur\t<song|video>            いま再生しているのが曲版か動画か
+      like\t<like|dislike|none>    評価の状態
+      alt\t<id>\t<種別>\t<題>\t<アーティスト>\t<秒>   対応する別バージョン (あれば)
 
-    対応する版が無い曲も多いため、無いときは none を返してクライアント側で
-    トグル自体を出さない (押せるのに何も起きない状態を避ける)。
+    「曲 / 動画」の切り替えは、同じ楽曲の別バージョンが別の動画として
+    存在するときだけ成り立つ。ytmusicapi はこれを counterpart として返す。
+    対応する版が無い曲も多いので、その場合 alt 行は出さない
+    (クライアントはトグルを出さない = 押せるのに何も起きない状態を避ける)。
+
+    **cur は対応版の有無に関わらず必ず返す。**
+    ミュージックビデオそのものの曲は counterpart を持たないが、
+    それでも動画として再生する必要があるため。
     """
     watch, _ = with_fallback(
         lambda yt: yt.get_watch_playlist(videoId=video_id, limit=1),
-        "対応バージョン取得",
+        "曲の情報取得",
     )
     tracks = watch.get("tracks") or []
     if not tracks:
-        return "none\t1\n"
+        return "cur\tsong\n"
 
     current = tracks[0]
-    other = current.get("counterpart")
-    if not other or not other.get("videoId"):
-        return "none\t1\n"
+    like = str(current.get("likeStatus") or "INDIFFERENT").lower()
+    if like not in ("like", "dislike"):
+        like = "none"
+    lines = [
+        f"cur\t{video_kind(current.get('videoType'))}",
+        f"like\t{like}",
+    ]
 
-    dur = other.get("duration_seconds") or parse_len(
-        other.get("length") or other.get("duration")
-    )
-    remember_art(other.get("videoId"), other.get("thumbnails"))
-    return (
-        f"cur\t{video_kind(current.get('videoType'))}\n"
-        f"alt\t{clean(other.get('videoId'))}\t{video_kind(other.get('videoType'))}\t"
-        f"{clean(other.get('title'))}\t{clean(artists_of(other))}\t{dur}\n"
-    )
+    other = current.get("counterpart")
+    if other and other.get("videoId"):
+        dur = other.get("duration_seconds") or parse_len(
+            other.get("length") or other.get("duration")
+        )
+        remember_art(other.get("videoId"), other.get("thumbnails"))
+        lines.append(
+            f"alt\t{clean(other.get('videoId'))}\t{video_kind(other.get('videoType'))}\t"
+            f"{clean(other.get('title'))}\t{clean(artists_of(other))}\t{dur}"
+        )
+    return "\n".join(lines) + "\n"
+
+
+def tsv_rate(video_id: str, rating: str) -> str:
+    """曲に評価を付ける (本家プレイヤーの高評価・低評価と同じ)。"""
+    mapping = {"like": "LIKE", "dislike": "DISLIKE", "none": "INDIFFERENT"}
+    value = mapping.get(rating)
+    if not value:
+        return "error\t評価の指定が不正です\n"
+    if not is_authed():
+        return "error\t評価にはログインが必要です\n"
+    get_yt().rate_song(video_id, value)
+    return f"like\t{rating}\n"
 
 
 def tsv_lyrics(video_id: str) -> str:
@@ -850,8 +876,11 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/radio" and "yt" in q:
                 self._text(tsv_radio(q["yt"][0]))
                 return
-            if url.path == "/api/counterpart" and "yt" in q:
-                self._text(tsv_counterpart(q["yt"][0]))
+            if url.path == "/api/trackinfo" and "yt" in q:
+                self._text(tsv_trackinfo(q["yt"][0]))
+                return
+            if url.path == "/api/rate" and "yt" in q and "r" in q:
+                self._text(tsv_rate(q["yt"][0], q["r"][0]))
                 return
         except Exception as e:
             # 保存済みトークンが失効・無効化されていると Google が 401 を返す。

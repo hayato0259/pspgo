@@ -63,6 +63,8 @@ void gfx_logo(int x, int y, int size);                    /* YT Music ロゴ */
 void gfx_glow(float x, float y, float w, float h, int alpha);   /* 白い光彩 */
 void gfx_shadow(float x, float y, float w, float h, int alpha); /* 柔らかい落ち影 */
 void gfx_card_fill(float x, float y, float size, unsigned int color); /* 角丸ベタ塗り */
+/* 高評価・低評価の親指。up=1 で上向き、0 で下向き */
+void gfx_thumb(float x, float y, float size, int up, unsigned int color);
 
 /* --- テキスト --- */
 void text(float x, float y, unsigned int color, float size, const char *s);

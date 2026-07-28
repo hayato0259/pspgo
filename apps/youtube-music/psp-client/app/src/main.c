@@ -31,7 +31,7 @@
 #include "store.h"
 #include "dl.h"
 #include "osk.h"
-#include "counterpart.h"
+#include "trackinfo.h"
 #include "video.h"
 
 PSP_MODULE_INFO("ytmusic", 0, 0, 1);
@@ -196,9 +196,9 @@ static int g_radio_error_frames = 0;
  * 取得は再生が始まってから 1 曲につき 1 回だけ行う。通信の待ちで描画は止まるが、
  * 音声は別スレッドなので再生は途切れない。
  */
-static const ApiCounterpart *g_counterpart = NULL;  /* 取得済みなら中身、まだなら NULL */
+static const ApiTrackInfo *g_info = NULL;  /* 取得済みなら中身、まだなら NULL */
 static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
-static int g_counterpart_msg_frames = 0;  /* 切り替えできない旨の表示時間 */
+static int g_info_msg_frames = 0;  /* 切り替えできない旨の表示時間 */
 static char g_video_for[24] = "";         /* 映像を受け取っている videoId */
 static int g_gate_frames = 0;             /* 映像待ちで音を止めている時間 */
 
@@ -212,12 +212,24 @@ static int g_controls_frames = CONTROLS_SHOW_FRAMES;
 static int g_seek_pending = 0;
 static int g_seek_target = 0;
 static int g_seek_frames = 0;
+static int g_rate_error_frames = 0;   /* 評価に失敗した旨の表示時間 */
+
+/*
+ * 再生画面の「その他」メニュー。
+ * 本家もプレイヤーの主要な操作は直接置き、
+ * ラジオやスリープタイマーはメニューの中に入れている。
+ */
+#define MENU_ITEMS 3
+static int g_menu_open = 0;
+static int g_menu_sel = 0;
 
 /* 動画版を再生しているときだけ映像も受け取る。
    曲版に戻ったり別の画面へ移ったら止める (通信と Media Engine を無駄に使わない) */
 static void video_sync(const ApiTrack *t)
 {
-    int want = (t && g_counterpart && g_counterpart->current_is_video && g_net_ok);
+    /* 対応版の有無とは無関係に「いま再生しているのが動画か」で決める。
+       ミュージックビデオそのものの曲は対応版を持たないため */
+    int want = (t && g_info && g_info->current_is_video && g_net_ok);
     if (want && strcmp(g_video_for, t->video_id) != 0) {
         snprintf(g_video_for, sizeof(g_video_for), "%s", t->video_id);
         video_start(t->video_id, t->duration_sec, player_elapsed_sec());
@@ -1309,16 +1321,16 @@ static void start_track(int index)
 
 /*
  * 再生中の曲の対応バージョンを、ワーカーに取りに行かせて結果を拾う。
- * 問い合わせ自体は counterpart.c の別スレッドで走るので、ここでは待たない
+ * 問い合わせ自体は trackinfo.c の別スレッドで走るので、ここでは待たない
  * (描画スレッドで通信を待つと、その間ボタンも絵も止まってしまう)。
  */
-static void counterpart_refresh(const char *video_id)
+static void trackinfo_refresh(const char *video_id)
 {
-    g_counterpart = NULL;
+    g_info = NULL;
     if (!video_id || !video_id[0] || !g_net_ok)
         return;   /* オフライン起動時は問い合わせない */
-    counterpart_request(video_id);
-    g_counterpart = counterpart_result(video_id);
+    trackinfo_request(video_id);
+    g_info = trackinfo_result(video_id);
 }
 
 /*
@@ -1326,14 +1338,27 @@ static void counterpart_refresh(const char *video_id)
  * キューの並びと位置は変えない (純正も切り替えで曲順は動かない)。
  * 0=切り替えた / <0=対応する版が無い
  */
-static int counterpart_switch(void)
+/* 高評価・低評価。同じ側をもう一度押すと解除する (本家と同じ) */
+static void rate_current(ApiRating want)
 {
-    if (!g_counterpart || !g_counterpart->has_alt)
+    if (g_playing_index < 0 || g_playing_index >= g_track_count || !g_info)
+        return;
+    ApiRating next = (g_info->rating == want) ? RATE_NONE : want;
+    if (api_rate(g_tracks[g_playing_index].video_id, next) < 0) {
+        g_rate_error_frames = 150;
+        return;
+    }
+    trackinfo_set_rating(g_tracks[g_playing_index].video_id, next);
+}
+
+static int version_switch(void)
+{
+    if (!g_info || !g_info->has_alt)
         return -1;
     if (g_playing_index < 0 || g_playing_index >= g_track_count)
         return -1;
-    g_tracks[g_playing_index] = g_counterpart->alt;
-    g_counterpart = NULL;   /* 切り替え先の対応情報は取り直す */
+    g_tracks[g_playing_index] = g_info->alt;
+    g_info = NULL;   /* 切り替え先の対応情報は取り直す */
     video_release();        /* 映像も作り直す */
     start_track(g_playing_index);
     return 0;
@@ -1342,7 +1367,7 @@ static int counterpart_switch(void)
 /* 純正と同じ「曲 / 動画」のトグル。いま再生している側を白く塗って示す */
 static void draw_song_video_toggle(float x, float y)
 {
-    if (!g_counterpart || !g_counterpart->has_alt)
+    if (!g_info || !g_info->has_alt)
         return;
     static const char *label[2] = { "曲", "動画" };
     const float size = 0.58f;
@@ -1350,7 +1375,7 @@ static void draw_song_video_toggle(float x, float y)
     int i;
     for (i = 0; i < 2; i++) {
         /* i=0 が曲、i=1 が動画。いま再生中の側が選択状態 */
-        int selected = ((i == 1) == (g_counterpart->current_is_video != 0));
+        int selected = ((i == 1) == (g_info->current_is_video != 0));
         float w = gfx_text_width(size, label[i]) + 18.0f;
         draw_rect((int)cx, (int)y - 12, (int)w, 17, selected ? C_TEXT : C_LINE);
         text(cx + 9.0f, y, selected ? C_BG : C_DIM, size, label[i]);
@@ -1602,6 +1627,50 @@ static int replace_queue_with_radio(void)
  * 映像の上に重ねる情報。画面を覆いすぎないよう上下の帯だけにする。
  * 本家も動画再生中は情報を最小限にするので、同じ考え方に揃えた。
  */
+/* 高評価・低評価。本家のプレイヤーと同じく、押されている側だけ白くする */
+static void draw_rating(float x, float y)
+{
+    if (!g_info)
+        return;
+    unsigned int up = (g_info->rating == RATE_LIKE) ? C_TEXT : C_DIM;
+    unsigned int down = (g_info->rating == RATE_DISLIKE) ? C_TEXT : C_DIM;
+    gfx_thumb(x, y, 16.0f, 1, up);
+    gfx_thumb(x + 24.0f, y, 16.0f, 0, down);
+}
+
+/* 「その他」メニュー。画面下から出るシート状の見た目にする */
+static void draw_player_menu(void)
+{
+    if (!g_menu_open)
+        return;
+    const int h = 96;
+    const int top = SCR_H - h;
+    draw_rect(0, 0, SCR_W, SCR_H, 0xA0000000);   /* 後ろを暗くする */
+    draw_rect(0, top, SCR_W, h, 0xFF181818);
+    draw_rect(0, top, SCR_W, 1, C_LINE);
+
+    char timer[48];
+    int minutes = g_sleep_timer_minutes[g_sleep_timer_option];
+    if (minutes > 0)
+        snprintf(timer, sizeof(timer), "スリープタイマー: %d分", minutes);
+    else
+        snprintf(timer, sizeof(timer), "%s", "スリープタイマー: オフ");
+
+    char mode[48];
+    const char *ml = play_mode_label();
+    snprintf(mode, sizeof(mode), "再生モード: %s", ml[0] ? ml : "通常");
+
+    const char *items[MENU_ITEMS] = { mode, "この曲からラジオ", timer };
+    for (int i = 0; i < MENU_ITEMS; i++) {
+        int y = top + 22 + i * 24;
+        if (i == g_menu_sel) {
+            draw_rect(16, y - 14, SCR_W - 32, 22, C_SEL_BG);
+            draw_rect(16, y - 14, 3, 22, C_ACCENT);
+        }
+        text(30, y, (i == g_menu_sel) ? C_TEXT : C_DIM, 0.68f, items[i]);
+    }
+}
+
 static void video_overlay(const ApiTrack *t, PlayerState st)
 {
     /* 触っていなければ引っ込める。映像を隠さないため */
@@ -1635,6 +1704,7 @@ static void video_overlay(const ApiTrack *t, PlayerState st)
         text(SCR_W - 120, SCR_H - 24, C_DIM, 0.55f, "バッファリング中...");
 
     draw_song_video_toggle(150, SCR_H - 22);
+    draw_rating(SCR_W - 70, SCR_H - 32);
 }
 
 /*
@@ -1666,12 +1736,39 @@ static Screen screen_player_tick(void)
     PlayerState st = player_state();
 
     /* 対応バージョンの取得結果を先に拾う (○ の判定で使うため) */
-    counterpart_refresh((g_playing_index >= 0 && g_playing_index < g_track_count)
+    trackinfo_refresh((g_playing_index >= 0 && g_playing_index < g_track_count)
                         ? g_tracks[g_playing_index].video_id : NULL);
 
     /* 何か操作したら操作パネルを出し直す (動画再生中は放っておくと消える) */
     if (g_pressed)
         g_controls_frames = CONTROLS_SHOW_FRAMES;
+
+    if (g_menu_open) {
+        if (g_pressed & PSP_CTRL_UP) {
+            snd_play(SND_MOVE);
+            g_menu_sel = (g_menu_sel + MENU_ITEMS - 1) % MENU_ITEMS;
+        }
+        if (g_pressed & PSP_CTRL_DOWN) {
+            snd_play(SND_MOVE);
+            g_menu_sel = (g_menu_sel + 1) % MENU_ITEMS;
+        }
+        if (g_pressed & PSP_CTRL_CIRCLE) {
+            snd_play(SND_OK);
+            if (g_menu_sel == 0) {
+                cycle_play_mode();
+            } else if (g_menu_sel == 1) {
+                if (replace_queue_with_radio() != 0)
+                    g_radio_error_frames = 150;
+                g_menu_open = 0;
+            } else {
+                cycle_sleep_timer();
+            }
+        }
+        if (g_pressed & (PSP_CTRL_CROSS | PSP_CTRL_SELECT)) {
+            snd_play(SND_CANCEL);
+            g_menu_open = 0;
+        }
+    } else {
 
     if (g_pressed & PSP_CTRL_CROSS) {
         snd_play(SND_CANCEL);
@@ -1683,11 +1780,11 @@ static Screen screen_player_tick(void)
         player_toggle_pause();
     }
     if (g_pressed & PSP_CTRL_TRIANGLE) {
-        if (counterpart_switch() == 0) {
+        if (version_switch() == 0) {
             snd_play(SND_OK);
             st = player_state();
         } else {
-            g_counterpart_msg_frames = 120;
+            g_info_msg_frames = 120;
         }
     }
     if ((g_pressed & PSP_CTRL_SQUARE) &&
@@ -1700,24 +1797,19 @@ static Screen screen_player_tick(void)
         snd_play(SND_MOVE);
         seek_by((g_pressed & PSP_CTRL_RIGHT) ? 10 : -10);
     }
-    if ((g_pressed_edge & PSP_CTRL_UP) &&
-        g_playing_index >= 0 && g_playing_index < g_track_count) {
-        if (replace_queue_with_radio() == 0) {
-            g_radio_error_frames = 0;
-            snd_play(SND_OK);
-        } else {
-            g_radio_error_frames = 150;
-        }
-    }
-    if (g_pressed & PSP_CTRL_SELECT) {
+    if (g_pressed_edge & PSP_CTRL_UP) {
         snd_play(SND_OK);
-        cycle_play_mode();
+        rate_current(RATE_LIKE);
     }
     if (g_pressed_edge & PSP_CTRL_DOWN) {
         snd_play(SND_OK);
-        cycle_sleep_timer();
+        rate_current(RATE_DISLIKE);
     }
-    seek_tick();
+    if (g_pressed & PSP_CTRL_SELECT) {
+        snd_play(SND_OK);
+        g_menu_open = 1;
+        g_menu_sel = 0;
+    }
     if (g_pressed & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) {
         int index = -1;
         if (g_play_mode == PLAY_MODE_SHUFFLE) {
@@ -1735,6 +1827,9 @@ static Screen screen_player_tick(void)
             player_stop();
         }
     }
+    }   /* メニュー表示中は再生操作を受け付けない */
+
+    seek_tick();
 
     ApiTrack *t = (g_playing_index >= 0) ? &g_tracks[g_playing_index] : NULL;
 
@@ -1750,6 +1845,7 @@ static Screen screen_player_tick(void)
         video_decode(gfx_draw_buffer()) == 1) {
         gfx_frame_begin_keep();
         video_overlay(t, st);
+        draw_player_menu();
         dl_status_line();
         gfx_frame_end();
         video_pace();
@@ -1759,7 +1855,7 @@ static Screen screen_player_tick(void)
     ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
     ui_frame_begin();
     ui_chrome("再生中",
-              "○: 再生/一時停止  △: 曲/動画  □: 歌詞  ←→: シーク  L/R: 前後  ↑: ラジオ  ↓: タイマー  SELECT: 再生モード  ×: 一覧",
+              "○: 再生/一時停止  △: 曲/動画  □: 歌詞  ←→: シーク  L/R: 前後  ↑↓: 評価  SELECT: その他  ×: 一覧",
               g_auth, g_account);
     if (t) {
         /* 左に大きなアートワーク (柔らかい影のみ、枠なし)、右に曲情報 */
@@ -1771,6 +1867,8 @@ static Screen screen_player_tick(void)
         intraFontPrintColumn(gfx_font(), tx, 70, SCR_W - tx - 16, t->title);
         intraFontSetStyle(gfx_font(), 0.62f, C_DIM, 0, 0.0f, 0);
         intraFontPrintColumn(gfx_font(), tx, 104, SCR_W - tx - 16, t->artist);
+
+        draw_rating(SCR_W - 76, 96);
 
         const char *st_label =
             (st == PLAYER_BUFFERING) ? "バッファリング中..." :
@@ -1803,10 +1901,10 @@ static Screen screen_player_tick(void)
             text_clipped(tx, 180, SCR_W - tx - 16, C_ACCENT, 0.58f,
                          "ラジオを取得できませんでした");
             g_radio_error_frames--;
-        } else if (g_counterpart_msg_frames > 0) {
+        } else if (g_info_msg_frames > 0) {
             text_clipped(tx, 180, SCR_W - tx - 16, C_DIM, 0.58f,
                          "この曲に対応する動画はありません");
-            g_counterpart_msg_frames--;
+            g_info_msg_frames--;
         } else {
             draw_song_video_toggle(tx, 180);
         }
@@ -1838,6 +1936,7 @@ static Screen screen_player_tick(void)
         text(24, 120, C_DIM, 0.75f, "(再生していません)");
         draw_sleep_timer(168, 152);
     }
+    draw_player_menu();
     dl_status_line();
     gfx_frame_end();
     return SCR_PLAYER;
@@ -1956,7 +2055,7 @@ int main(void)
     art_init();
     snd_init();
     dl_init();
-    counterpart_init();
+    trackinfo_init();
 
     Screen scr = SCR_CONNECT;
     while (g_running) {

@@ -45,21 +45,34 @@ int api_radio(const char *video_id, char *title_out, int title_size,
 /* /api/lyrics?yt=。TSV を buf にそのまま格納。戻り値: バイト数 / <0 エラー */
 int api_lyrics(const char *video_id, char *buf, int bufsize);
 
+/* 評価の状態 (本家プレイヤーの高評価・低評価) */
+typedef enum {
+    RATE_NONE = 0,
+    RATE_LIKE,
+    RATE_DISLIKE
+} ApiRating;
+
 /*
- * 曲版とミュージックビデオ版の対応。
- * YouTube Music の画面にある「曲 / 動画」の切り替えと同じもので、
- * 同じ楽曲の別バージョンは別の動画として存在する。
- * 対応する版が無い曲も多いので、その場合は has_alt = 0 になる。
+ * 再生中の曲について、一度の問い合わせで分かること。
+ *
+ * has_alt は「曲 / 動画」の切り替え先があるかどうか。
+ * 同じ楽曲の別バージョンは別の動画として存在するが、対応する版が無い曲も多い。
+ * current_is_video は対応版の有無と関係なく必ず入る
+ * (ミュージックビデオそのものの曲は対応版を持たないが、動画として再生する)。
  */
 typedef struct {
-    int has_alt;            /* 0 = 対応する版が無い (トグルを出さない) */
-    int current_is_video;   /* いま再生しているのがミュージックビデオ版か */
-    int alt_is_video;       /* 切り替え先がミュージックビデオ版か */
+    int current_is_video;   /* いま再生しているのが動画か */
+    ApiRating rating;       /* 高評価・低評価の状態 */
+    int has_alt;            /* 0 = 切り替え先が無い (トグルを出さない) */
+    int alt_is_video;       /* 切り替え先が動画か */
     ApiTrack alt;           /* 切り替え先 */
-} ApiCounterpart;
+} ApiTrackInfo;
 
-/* /api/counterpart?yt=。戻り値: 0=成功 (has_alt を見る) / <0 エラー */
-int api_counterpart(const char *video_id, ApiCounterpart *out);
+/* /api/trackinfo?yt=。戻り値: 0=成功 / <0 エラー */
+int api_trackinfo(const char *video_id, ApiTrackInfo *out);
+
+/* /api/rate?yt=&r=。評価を付ける。戻り値: 0=成功 / <0 エラー */
+int api_rate(const char *video_id, ApiRating rating);
 
 /* 直近の API 呼び出しがサーバーから返したエラー文。無ければ空文字列。
    サーバーが error 行を返した場合、上記の関数は負値を返す。 */

@@ -274,13 +274,16 @@ int api_lyrics(const char *video_id, char *buf, int bufsize)
     return api_get(path, buf, bufsize);
 }
 
-/* --- /api/counterpart --------------------------------------------------- */
+/* --- /api/trackinfo --------------------------------------------------- */
 
 static int cp_line(char **f, int nf, void *vctx)
 {
-    ApiCounterpart *out = vctx;
+    ApiTrackInfo *out = vctx;
     if (strcmp(f[0], "cur") == 0 && nf >= 2) {
         out->current_is_video = (strcmp(f[1], "video") == 0);
+    } else if (strcmp(f[0], "like") == 0 && nf >= 2) {
+        out->rating = (strcmp(f[1], "like") == 0)    ? RATE_LIKE :
+                      (strcmp(f[1], "dislike") == 0) ? RATE_DISLIKE : RATE_NONE;
     } else if (strcmp(f[0], "alt") == 0 && nf >= 6) {
         out->has_alt = 1;
         copy_field(out->alt.video_id, sizeof(out->alt.video_id), f[1]);
@@ -300,13 +303,13 @@ static int cp_line(char **f, int nf, void *vctx)
  */
 static char g_cp_buf[1024];
 
-int api_counterpart(const char *video_id, ApiCounterpart *out)
+int api_trackinfo(const char *video_id, ApiTrackInfo *out)
 {
     char path[160];
     if (!video_id || !out)
         return -1;
     memset(out, 0, sizeof(*out));
-    snprintf(path, sizeof(path), "/api/counterpart?yt=%s", video_id);
+    snprintf(path, sizeof(path), "/api/trackinfo?yt=%s", video_id);
     int len = api_get(path, g_cp_buf, sizeof(g_cp_buf));
     if (len < 0)
         return len;
@@ -314,5 +317,22 @@ int api_counterpart(const char *video_id, ApiCounterpart *out)
     if (tsv_value(g_cp_buf, "error", err, sizeof(err)))
         return API_ERR_SERVER;
     for_each_line(g_cp_buf, 6, cp_line, out);
+    return 0;
+}
+
+int api_rate(const char *video_id, ApiRating rating)
+{
+    char path[160];
+    if (!video_id)
+        return -1;
+    const char *r = (rating == RATE_LIKE)    ? "like" :
+                    (rating == RATE_DISLIKE) ? "dislike" : "none";
+    snprintf(path, sizeof(path), "/api/rate?yt=%s&r=%s", video_id, r);
+    int len = api_get(path, g_cp_buf, sizeof(g_cp_buf));
+    if (len < 0)
+        return len;
+    char err[8];
+    if (tsv_value(g_cp_buf, "error", err, sizeof(err)))
+        return API_ERR_SERVER;
     return 0;
 }
