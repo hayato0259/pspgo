@@ -148,6 +148,10 @@ JavaScript 実行環境に解かせる。無いと**ログインしていても�
 Debian が配る node は 20 なので足りない。**Debian で確実なのは quickjs**
 （`qjs` コマンドを入れてくれる）。
 
+**入れるだけでは使われない。** yt-dlp が既定で使うのは deno だけで、
+他は `--js-runtimes` で名前を渡さないと「unavailable」のままになる。
+サーバーは入っているものを自分で探して渡すので、apt で入れるだけでよい。
+
 ### 2. リポジトリとサーバー
 
 ```bash
@@ -374,7 +378,10 @@ cd ~/pspgo/apps/youtube-music/server
      **必ず `yt-dlp[default]` で入れる**（requirements.txt と週次更新の
      両方をそう直してある）
   2. **JavaScript の実行環境**: Mac には deno があったので気付かなかったが、
-     Raspberry Pi には何も入っていなかった。`sudo apt install -y quickjs`
+     Raspberry Pi には何も入っていなかった。`sudo apt install -y quickjs`。
+     さらに **deno 以外は `--js-runtimes` で明示しないと使われない**
+     （入れただけでは `quickjs (unavailable)` のまま）。
+     サーバーが自分で探して渡すようにしてある
   サーバーは起動時にこの 2 つを確認し、足りなければ入れ方を出して止まる
 - **電源不足の警告が出た** (`vcgencmd get_throttled` が `0x50005`)。
   Pi 4 は 5V/3A が必要。`0x0` 以外なら電源かケーブルを疑う

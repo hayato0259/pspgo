@@ -477,6 +477,9 @@ def ytdlp_cmd(*args: str) -> list:
     作り方は docs/raspberry-pi-server.md を参照。
     """
     cmd = ["yt-dlp", "--no-warnings", "-o", "-"]
+    runtime = js_runtime()
+    if runtime:
+        cmd += ["--js-runtimes", runtime]
     jar = cookies_copy()
     if jar:
         cmd += ["--cookies", jar]
@@ -1092,27 +1095,41 @@ class Handler(BaseHTTPRequestHandler):
         self._text("error\tnot found\n", code=404)
 
 
+_js_runtime = False   # False = 未判定 (None は「無い」)
+
+
 def js_runtime() -> str:
-    """yt-dlp が使える JavaScript 実行環境の名前。無ければ None。
+    """yt-dlp に渡す JavaScript 実行環境の名前。無ければ None。
 
     yt-dlp は YouTube の JS チャレンジを外部のランタイムに解かせる。
-    対応は deno / bun / quickjs (qjs) / node で、**node だけは 22 以上**が要る
-    (Debian が配る node 20 では足りない)。Debian は quickjs を配っているので、
-    Raspberry Pi ではそれが最も手軽。
+    対応は deno / bun / quickjs (実行ファイル名は qjs) / node で、
+    **node だけは 22 以上**が要る (Debian が配る node 20 では足りない)。
+    Debian は quickjs を配っているので Raspberry Pi ではそれが最も手軽。
+
+    **見つけたものは名前で明示的に渡す必要がある。**
+    yt-dlp が既定で使うのは deno だけで、入っているだけでは使われない
+    (`--js-runtimes` で指定する)。
     """
-    for name in ("deno", "bun", "qjs"):
-        if shutil.which(name):
-            return name
-    node = shutil.which("node")
-    if node:
-        try:
-            out = subprocess.run([node, "--version"], capture_output=True,
-                                 text=True, timeout=10).stdout.strip()
-            if int(out.lstrip("v").split(".")[0]) >= 22:
-                return "node"
-        except Exception:
-            pass
-    return None
+    global _js_runtime
+    if _js_runtime is not False:
+        return _js_runtime
+
+    _js_runtime = None
+    for exe, name in (("deno", "deno"), ("bun", "bun"), ("qjs", "quickjs")):
+        if shutil.which(exe):
+            _js_runtime = name
+            break
+    else:
+        node = shutil.which("node")
+        if node:
+            try:
+                out = subprocess.run([node, "--version"], capture_output=True,
+                                     text=True, timeout=10).stdout.strip()
+                if int(out.lstrip("v").split(".")[0]) >= 22:
+                    _js_runtime = "node"
+            except Exception:
+                pass
+    return _js_runtime
 
 
 def main():
