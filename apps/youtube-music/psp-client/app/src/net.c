@@ -8,6 +8,7 @@
 #include <pspnet.h>
 #include <pspnet_inet.h>
 #include <pspnet_apctl.h>
+#include <pspnet_resolver.h>
 #include <string.h>
 #include <stdio.h>
 #include <stdlib.h>
@@ -17,12 +18,16 @@
 /* --- 接続先サーバーの実行時解決 ------------------------------------------
  * EBOOT と同じフォルダの server.txt を読む。書式は 1 行目に
  *   192.168.0.5:8080   (ポート省略時は 8080)
- * ※ この層は DNS を引かないため、ホスト名ではなく IPv4 アドレスを書くこと。
+ *   myhome.example.net:8080
  * ファイルが無ければコンパイル時既定 (開発時は 127.0.0.1 = PPSSPP) を使う。
  */
 static char g_srv_host[64] = SERVER_HOST;
 static int g_srv_port = SERVER_PORT;
 static int g_srv_loaded = 0;
+static unsigned int g_srv_ip;
+static int g_srv_ip_ok = 0;
+static char g_srv_ip_host[64];
+static char g_resolver_buf[1024] __attribute__((aligned(64)));
 
 void net_load_server_config(void)
 {
@@ -99,6 +104,38 @@ static unsigned int ipv4_aton(const char *s)
     return parts[0] | (parts[1] << 8) | (parts[2] << 16) | (parts[3] << 24);
 }
 
+static int resolve_host(const char *host, unsigned int *ip)
+{
+    unsigned int parsed = ipv4_aton(host);
+    if (parsed != 0xFFFFFFFFu) {
+        *ip = parsed;
+        return 0;
+    }
+
+    if (g_srv_ip_ok && strcmp(host, g_srv_ip_host) == 0) {
+        *ip = g_srv_ip;
+        return 0;
+    }
+
+    int rid;
+    int rc = sceNetResolverCreate(&rid, g_resolver_buf,
+                                  sizeof(g_resolver_buf));
+    if (rc < 0)
+        return -2;
+
+    struct in_addr resolved;
+    rc = sceNetResolverStartNtoA(rid, host, &resolved, 5, 2);
+    sceNetResolverDelete(rid);
+    if (rc < 0)
+        return -2;
+
+    g_srv_ip = resolved.s_addr;
+    snprintf(g_srv_ip_host, sizeof(g_srv_ip_host), "%s", host);
+    g_srv_ip_ok = 1;
+    *ip = g_srv_ip;
+    return 0;
+}
+
 int net_init(void)
 {
     int rc;
@@ -111,6 +148,8 @@ int net_init(void)
     rc = sceNetInit(128 * 1024, 42, 4 * 1024, 42, 4 * 1024);
     if (rc < 0) return rc;
     rc = sceNetInetInit();
+    if (rc < 0) return rc;
+    rc = sceNetResolverInit();
     if (rc < 0) return rc;
     rc = sceNetApctlInit(0x8000, 48);
     if (rc < 0) return rc;
@@ -166,8 +205,7 @@ static int http_request(const char *host, int port, const char *path)
     addr.sin_len = sizeof(addr);
     addr.sin_family = PSP_AF_INET;
     addr.sin_port = psp_htons((unsigned short)port);
-    addr.sin_addr.s_addr = ipv4_aton(host);
-    if (addr.sin_addr.s_addr == 0xFFFFFFFFu) {
+    if (resolve_host(host, &addr.sin_addr.s_addr) < 0) {
         net_close(sock);
         return -2;
     }
