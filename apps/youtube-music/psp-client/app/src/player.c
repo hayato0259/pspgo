@@ -18,6 +18,9 @@
 #include "store.h"
 #include "common.h"
 
+/* 音声チャンネルが既に確保済み。pspsdk のヘッダに定義が無いので自前で持つ */
+#define SCE_AUDIO_ERROR_CH_BUSY  ((int)0x80268002)
+
 #define MP3_BUF_SIZE  (128 * 1024)
 #define PCM_BUF_SIZE  (1152 * 2 * 2 * 4)
 
@@ -34,8 +37,10 @@ static char g_video_id[24];
 static char g_file_path[128];              /* ローカル再生時のパス ("" = 配信) */
 static volatile int g_duration_hint = 0;   /* 曲の長さ (秒)。0 = 不明 */
 static SceUID g_thread = -1;
+static volatile int g_thread_running = 0;
 
 static int decode_thread(SceSize args, void *argp);
+static int decode_body(SceSize args, void *argp);
 
 int player_global_init(void)
 {
@@ -50,9 +55,24 @@ void player_stop(void)
 {
     if (g_thread >= 0) {
         g_cmd_stop = 1;
-        /* スレッドの自然終了を待つ (最大5秒) */
-        SceUInt timeout = 5 * 1000 * 1000;
+        /*
+         * スレッドの自然終了を待つ。
+         * 待ちきらないまま削除すると、そのスレッドが音声チャンネルと
+         * sceMp3 ハンドルを掴んだままになり、次の再生が
+         * 「チャンネル使用中」(0x80268002) で失敗する。
+         * 受信待ちは中断できるようにしてあるので、通常は即座に終わる。
+         */
+        int spins = 0;
+        while (g_thread_running && ++spins < 500)   /* 最大5秒 */
+            sceKernelDelayThread(10 * 1000);
+        SceUInt timeout = 1000 * 1000;
         sceKernelWaitThreadEnd(g_thread, &timeout);
+        if (g_thread_running) {
+            /* 最後の手段。強制終了させたうえで資源を明示的に解放する */
+            sceKernelTerminateThread(g_thread);
+            sceAudioSRCChRelease();
+            g_thread_running = 0;
+        }
         sceKernelDeleteThread(g_thread);
         g_thread = -1;
     }
@@ -124,7 +144,21 @@ static int fail(int sock, FILE *fp, int handle, int src_reserved, int code)
     return -1;
 }
 
+/*
+ * スレッドが本当に終わったか (資源を手放したか) を示す旗。
+ * sceKernelWaitThreadEnd はエミュレータで期待通りに待ってくれないことがあり、
+ * 終わりきる前に次の再生を始めると音声チャンネルを取り合って失敗する。
+ * 実処理を decode_body に分け、戻ってきた時点で必ず 0 にする。
+ */
 static int decode_thread(SceSize args, void *argp)
+{
+    g_thread_running = 1;
+    int rc = decode_body(args, argp);
+    g_thread_running = 0;
+    return rc;
+}
+
+static int decode_body(SceSize args, void *argp)
 {
     int sock = -1;
     FILE *fp = NULL;
@@ -186,7 +220,8 @@ static int decode_thread(SceSize args, void *argp)
                 return fail(sock, fp, handle, src_reserved, rc);
             if (towrite > 0) {
                 int got = fp ? (int)fread(dst, 1, (size_t)towrite, fp)
-                             : net_recv_wait(sock, dst, towrite);
+                             : net_recv_wait_abortable(sock, dst, towrite,
+                                                       &g_cmd_stop);
                 if (got < 0)
                     return fail(sock, fp, handle, src_reserved, got);
                 if (got == 0) {
@@ -261,6 +296,16 @@ static int decode_thread(SceSize args, void *argp)
         if (!src_reserved) {
             int hz = sceMp3GetSamplingRate(handle);
             int rc = sceAudioSRCChReserve(nsamples, hz, 2);
+            if (rc == SCE_AUDIO_ERROR_CH_BUSY) {
+                /*
+                 * 曲を切り替えた直後、前の再生スレッドが音声チャンネルを
+                 * 手放しきれていないことがある。掴んだままだと新しい再生が
+                 * 始まらないので、一度解放してから取り直す。
+                 */
+                sceAudioSRCChRelease();
+                sceKernelDelayThread(50 * 1000);
+                rc = sceAudioSRCChReserve(nsamples, hz, 2);
+            }
             if (rc < 0)
                 return fail(sock, fp, handle, src_reserved, rc);
             src_reserved = 1;

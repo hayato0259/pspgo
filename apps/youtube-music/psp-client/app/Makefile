@@ -11,6 +11,16 @@ CFLAGS = -O2 -G0 -Wall -DSERVER_HOST=\"$(SERVER_HOST)\" -DSERVER_PORT=$(SERVER_P
 ifdef AUTODEMO
 CFLAGS += -DAUTODEMO
 endif
+# AUTODEMO で一括ダウンロード (□) を自動入力しない。
+# 回線を占有してストリーミングが失敗するため、再生まわりの確認時に使う
+ifdef AUTODEMO_NODL
+CFLAGS += -DAUTODEMO_NODL
+endif
+# 接続後すぐ指定の曲を再生画面で流す (再生画面の見た目を確認する用)
+#   make DEMO_TRACK='\"lYBUbBu4W08\"'
+ifdef DEMO_TRACK
+CFLAGS += -DDEMO_TRACK=$(DEMO_TRACK)
+endif
 # 開発時の目視確認用: 画面ごとにフレームバッファを raw で書き出す
 ifdef UIDEBUG
 CFLAGS += -DUIDEBUG

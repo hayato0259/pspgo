@@ -23,6 +23,11 @@ int net_init(void);
 /* EAGAIN を待ち合わせる recv。>0 受信 / 0 切断 / <0 エラー */
 int net_recv_wait(int sock, void *buf, int len);
 
+/* 受信待ちを途中で打ち切れる版。abort_flag が 0 以外になったら諦めて負値を返す。
+   再生停止のように「待っている側を早く終わらせたい」場面で使う */
+int net_recv_wait_abortable(int sock, void *buf, int len,
+                            const volatile int *abort_flag);
+
 /* HTTP GET してボディ全体を buf に受け取る。戻り値: ボディ長 / <0 エラー */
 int http_get(const char *host, int port, const char *path, char *buf, int bufsize);
 

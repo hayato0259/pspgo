@@ -273,3 +273,37 @@ int api_lyrics(const char *video_id, char *buf, int bufsize)
     snprintf(path, sizeof(path), "/api/lyrics?yt=%s", video_id);
     return api_get(path, buf, bufsize);
 }
+
+/* --- /api/counterpart --------------------------------------------------- */
+
+static int cp_line(char **f, int nf, void *vctx)
+{
+    ApiCounterpart *out = vctx;
+    if (strcmp(f[0], "cur") == 0 && nf >= 2) {
+        out->current_is_video = (strcmp(f[1], "video") == 0);
+    } else if (strcmp(f[0], "alt") == 0 && nf >= 6) {
+        out->has_alt = 1;
+        copy_field(out->alt.video_id, sizeof(out->alt.video_id), f[1]);
+        out->alt_is_video = (strcmp(f[2], "video") == 0);
+        copy_field(out->alt.title, sizeof(out->alt.title), f[3]);
+        copy_field(out->alt.artist, sizeof(out->alt.artist), f[4]);
+        out->alt.duration_sec = atoi(f[5]);
+    }
+    return 0;
+}
+
+int api_counterpart(const char *video_id, ApiCounterpart *out)
+{
+    char path[160];
+    if (!video_id || !out)
+        return -1;
+    memset(out, 0, sizeof(*out));
+    snprintf(path, sizeof(path), "/api/counterpart?yt=%s", video_id);
+    int len = api_get(path, g_buf, sizeof(g_buf));
+    if (len < 0)
+        return len;
+    if (has_server_error())
+        return API_ERR_SERVER;
+    for_each_line(g_buf, 6, cp_line, out);
+    return 0;
+}

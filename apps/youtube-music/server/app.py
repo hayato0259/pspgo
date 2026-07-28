@@ -341,6 +341,11 @@ def clean(s, limit: int = 88) -> str:
 
 def artists_of(item) -> str:
     names = [a.get("name", "") for a in item.get("artists") or [] if a.get("name")]
+    # ミュージックビデオの項目には再生回数や高評価数がアーティストと同じ並びで
+    # 入ってくる (「17億回視聴」「高評価 1928万 件」など)。PSP の狭い画面では
+    # 邪魔になるだけなので落とす。
+    noise = ("回視聴", "高評価", " views", " likes")
+    names = [n for n in names if not any(k in n for k in noise)]
     return ", ".join(n for n in names if n)
 
 
@@ -468,6 +473,49 @@ def tsv_radio(video_id: str) -> str:
             f"track\t{clean(vid)}\t{clean(t.get('title'))}\t{clean(artists_of(t))}\t{dur}"
         )
     return "\n".join(lines) + "\n"
+
+
+def video_kind(video_type: str) -> str:
+    """YouTube Music の種別を「曲」か「動画」に丸める。
+
+    ATV (Audio Track Video) は音源に静止画を付けたもの = 曲扱い。
+    それ以外 (OMV = 公式ミュージックビデオ, UGC = 利用者投稿) は動画扱い。
+    """
+    return "song" if (video_type or "").endswith("ATV") else "video"
+
+
+def tsv_counterpart(video_id: str) -> str:
+    """曲版とミュージックビデオ版の対応を返す。
+
+    YouTube Music の画面にある「曲 / 動画」の切り替えと同じもので、
+    同じ楽曲の別バージョンは別の動画として存在する。
+    ytmusicapi はこれを counterpart として返してくれる。
+
+    対応する版が無い曲も多いため、無いときは none を返してクライアント側で
+    トグル自体を出さない (押せるのに何も起きない状態を避ける)。
+    """
+    watch, _ = with_fallback(
+        lambda yt: yt.get_watch_playlist(videoId=video_id, limit=1),
+        "対応バージョン取得",
+    )
+    tracks = watch.get("tracks") or []
+    if not tracks:
+        return "none\t1\n"
+
+    current = tracks[0]
+    other = current.get("counterpart")
+    if not other or not other.get("videoId"):
+        return "none\t1\n"
+
+    dur = other.get("duration_seconds") or parse_len(
+        other.get("length") or other.get("duration")
+    )
+    remember_art(other.get("videoId"), other.get("thumbnails"))
+    return (
+        f"cur\t{video_kind(current.get('videoType'))}\n"
+        f"alt\t{clean(other.get('videoId'))}\t{video_kind(other.get('videoType'))}\t"
+        f"{clean(other.get('title'))}\t{clean(artists_of(other))}\t{dur}\n"
+    )
 
 
 def tsv_lyrics(video_id: str) -> str:
@@ -609,6 +657,9 @@ class Handler(BaseHTTPRequestHandler):
                 return
             if url.path == "/api/radio" and "yt" in q:
                 self._text(tsv_radio(q["yt"][0]))
+                return
+            if url.path == "/api/counterpart" and "yt" in q:
+                self._text(tsv_counterpart(q["yt"][0]))
                 return
         except Exception as e:
             # 保存済みトークンが失効・無効化されていると Google が 401 を返す。

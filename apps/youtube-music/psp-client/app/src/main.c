@@ -111,12 +111,18 @@ static void input_update(void)
             fired = 1;
             g_pressed |= PSP_CTRL_CIRCLE;
         }
+#ifndef AUTODEMO_NODL
         /* ホームとプレイリストでは ○ の前に □ を1回押し、
            ダウンロード経路 (dl.c → store.c) も自動で通す
-           (ホームの最初のカードが単曲でプレイリストを経由しない日もあるため両方) */
+           (ホームの最初のカードが単曲でプレイリストを経由しない日もあるため両方)
+
+           AUTODEMO_NODL=1 で無効にできる。一括ダウンロードは回線を占有して
+           ストリーミングを失敗させる (0x807F00FD) ため、
+           再生まわりを見たいときは切っておく */
         if ((g_demo_screen == SCR_HOME || g_demo_screen == SCR_PLAYLIST) &&
             held == 140)
             g_pressed |= PSP_CTRL_SQUARE;
+#endif
     }
 #endif
 }
@@ -177,6 +183,18 @@ static int g_can_login = 0;      /* サーバーに OAuth クライアントが�
 static char g_account[64] = "-";
 static char g_error[192] = "";
 static int g_radio_error_frames = 0;
+
+/*
+ * 曲版とミュージックビデオ版の切り替え (YouTube Music の「曲 / 動画」と同じもの)。
+ * 同じ楽曲の別バージョンは別の動画として存在する。
+ * 対応する版が無い曲も多いので、取得できるまでと無い場合はトグルを出さない。
+ *
+ * 取得は再生が始まってから 1 曲につき 1 回だけ行う。通信の待ちで描画は止まるが、
+ * 音声は別スレッドなので再生は途切れない。
+ */
+static ApiCounterpart g_counterpart;
+static char g_counterpart_for[24] = "";   /* 取得済みの videoId */
+static int g_counterpart_msg_frames = 0;  /* 切り替えできない旨の表示時間 */
 static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
 static int g_off_sel = 0, g_off_scroll = 0;   /* オフライン画面のカーソル */
@@ -539,6 +557,22 @@ static Screen screen_connect_tick(void)
     }
     g_auth = (rc > 0);
     g_net_ok = 1;
+
+#ifdef DEMO_TRACK
+    /*
+     * 開発時の確認用: 接続できたら指定の曲だけのキューを作って再生画面に飛ぶ。
+     * 画面を手で辿らずに再生画面の見た目を確認するために使う
+     * (エミュレータへの入力送信は本体の操作を奪うため使わない方針)。
+     *   make DEMO_TRACK='\"<videoId>\"'
+     */
+    g_track_count = 1;
+    snprintf(g_tracks[0].video_id, sizeof(g_tracks[0].video_id), "%s", DEMO_TRACK);
+    snprintf(g_tracks[0].title, sizeof(g_tracks[0].title), "%s", "確認用の再生");
+    g_tracks[0].artist[0] = '\0';
+    g_tracks[0].duration_sec = 0;
+    start_track(0);
+    return SCR_PLAYER;
+#endif
 
     /* 未ログインでログイン可能なら、まず選択画面を出す */
     if (!g_auth && g_can_login) {
@@ -1173,6 +1207,59 @@ static void start_track(int index)
     player_start(g_tracks[index].video_id, g_tracks[index].duration_sec);
 }
 
+/* --- 曲版 / ミュージックビデオ版の切り替え ------------------------------- */
+
+/* 再生中の曲について、対応する別バージョンを 1 曲につき 1 回だけ問い合わせる */
+static void counterpart_refresh(const char *video_id)
+{
+    if (!video_id || !video_id[0])
+        return;
+    if (strcmp(g_counterpart_for, video_id) == 0)
+        return;
+    if (!g_net_ok)
+        return;   /* オフライン起動時は問い合わせない */
+    snprintf(g_counterpart_for, sizeof(g_counterpart_for), "%s", video_id);
+    if (api_counterpart(video_id, &g_counterpart) < 0)
+        memset(&g_counterpart, 0, sizeof(g_counterpart));
+}
+
+/*
+ * 別バージョンに入れ替えて再生し直す。
+ * キューの並びと位置は変えない (純正も切り替えで曲順は動かない)。
+ * 0=切り替えた / <0=対応する版が無い
+ */
+static int counterpart_switch(void)
+{
+    if (!g_counterpart.has_alt)
+        return -1;
+    if (g_playing_index < 0 || g_playing_index >= g_track_count)
+        return -1;
+    g_tracks[g_playing_index] = g_counterpart.alt;
+    g_counterpart_for[0] = '\0';   /* 切り替え先の対応情報を取り直す */
+    start_track(g_playing_index);
+    return 0;
+}
+
+/* 純正と同じ「曲 / 動画」のトグル。いま再生している側を白く塗って示す */
+static void draw_song_video_toggle(float x, float y)
+{
+    if (!g_counterpart.has_alt)
+        return;
+    static const char *label[2] = { "曲", "動画" };
+    const float size = 0.58f;
+    float cx = x;
+    int i;
+    for (i = 0; i < 2; i++) {
+        /* i=0 が曲、i=1 が動画。いま再生中の側が選択状態 */
+        int selected = ((i == 1) == (g_counterpart.current_is_video != 0));
+        float w = gfx_text_width(size, label[i]) + 18.0f;
+        draw_rect((int)cx, (int)y - 12, (int)w, 17, selected ? C_TEXT : C_LINE);
+        text(cx + 9.0f, y, selected ? C_BG : C_DIM, size, label[i]);
+        cx += w + 4.0f;
+    }
+    text(cx + 6.0f, y, C_DIM, 0.55f, "○: 切替");
+}
+
 /* --- プレイリスト --- */
 
 static Screen screen_playlist_tick(void)
@@ -1435,6 +1522,14 @@ static Screen screen_player_tick(void)
         snd_play(SND_OK);
         cycle_play_mode();
     }
+    if (g_pressed & PSP_CTRL_CIRCLE) {
+        if (counterpart_switch() == 0) {
+            snd_play(SND_OK);
+            st = player_state();
+        } else {
+            g_counterpart_msg_frames = 120;
+        }
+    }
     if (g_pressed_edge & PSP_CTRL_DOWN) {
         snd_play(SND_OK);
         cycle_sleep_timer();
@@ -1504,6 +1599,26 @@ static Screen screen_player_tick(void)
         }
         draw_sleep_timer(st == PLAYER_ERROR ? 370 : tx, 152);
 
+        /*
+         * 通知行。トグルと一時的なお知らせが同じ場所を取り合うため、
+         * 重ならないよう優先順位を付けて 1 つだけ描く。
+         */
+        /* 再生状態を問わず取りに行く。バッファリング中に済ませておけば
+           再生開始と同時にトグルが出るし、再生に失敗した曲でも
+           もう一方の版に切り替えて試せる */
+        counterpart_refresh(t->video_id);
+        if (g_radio_error_frames > 0) {
+            text_clipped(tx, 180, SCR_W - tx - 16, C_ACCENT, 0.58f,
+                         "ラジオを取得できませんでした");
+            g_radio_error_frames--;
+        } else if (g_counterpart_msg_frames > 0) {
+            text_clipped(tx, 180, SCR_W - tx - 16, C_DIM, 0.58f,
+                         "この曲に対応する動画はありません");
+            g_counterpart_msg_frames--;
+        } else {
+            draw_song_video_toggle(tx, 180);
+        }
+
         /* 進捗バー (細いトラック + 赤 + 角丸のつまみ) */
         int elapsed = player_elapsed_sec();
         char tm[32];
@@ -1530,11 +1645,6 @@ static Screen screen_player_tick(void)
     } else {
         text(24, 120, C_DIM, 0.75f, "(再生していません)");
         draw_sleep_timer(168, 152);
-    }
-    if (g_radio_error_frames > 0) {
-        text_clipped(168, 176, SCR_W - 184, C_ACCENT, 0.58f,
-                     "ラジオを取得できませんでした");
-        g_radio_error_frames--;
     }
     dl_status_line();
     gfx_frame_end();

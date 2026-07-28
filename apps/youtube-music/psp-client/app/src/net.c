@@ -200,7 +200,8 @@ int net_init(void)
     return 0;
 }
 
-int net_recv_wait(int sock, void *buf, int len)
+int net_recv_wait_abortable(int sock, void *buf, int len,
+                            const volatile int *abort_flag)
 {
     int tries = 0;
     for (;;) {
@@ -209,10 +210,23 @@ int net_recv_wait(int sock, void *buf, int len)
             return got;
         if (sceNetInetGetErrno() != 11 /* EAGAIN */)
             return got;
+        /*
+         * 中断要求が来ていたら待たずに諦める。
+         * ここで最大10秒粘ると、曲を切り替えたときに前の再生スレッドが
+         * 終わりきらず、音声チャンネルを掴んだままになる
+         * (次の再生が「チャンネル使用中」で失敗する)。
+         */
+        if (abort_flag && *abort_flag)
+            return -1;
         if (++tries > 2000) /* 約10秒でタイムアウト */
             return -1;
         sceKernelDelayThread(5 * 1000);
     }
+}
+
+int net_recv_wait(int sock, void *buf, int len)
+{
+    return net_recv_wait_abortable(sock, buf, len, NULL);
 }
 
 void net_close(int sock)
