@@ -1,8 +1,11 @@
 #!/bin/bash
 # Mac から Raspberry Pi へサーバーを配置してセットアップする。
 #
-#   ./deploy-pi.sh <user>@<host>            例: ./deploy-pi.sh pi@192.168.0.50
-#   ./deploy-pi.sh <user>@<host> --no-auth  認証ファイル (auth/) を送らない
+#   ./deploy-pi.sh <user>@<host>             例: ./deploy-pi.sh pi@192.168.0.50
+#   ./deploy-pi.sh <user>@<host> --no-auth   認証ファイル (auth/) を送らない
+#   ./deploy-pi.sh <user>@<host> --code-only コードを送ってサービスを再起動するだけ
+#                                            (初回セットアップ済みの更新用。sudo は
+#                                             再起動にしか使わないので入力を求められない)
 #
 # 既定以外の鍵で接続する場合は環境変数で渡す:
 #   PSPGO_SSH_KEY=~/.ssh/pspgo_pi ./deploy-pi.sh pi@192.168.0.50
@@ -20,11 +23,19 @@ if [[ -z "$TARGET" ]]; then
     exit 1
 fi
 SEND_AUTH=1
-[[ "${2:-}" == "--no-auth" ]] && SEND_AUTH=0
+CODE_ONLY=0
+for arg in "${@:2}"; do
+    case "$arg" in
+        --no-auth)   SEND_AUTH=0 ;;
+        --code-only) CODE_ONLY=1 ;;
+        *) echo "不明なオプション: $arg" >&2; exit 1 ;;
+    esac
+done
 
 APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$APP_DIR/server"
 DEST="pspgo-server"          # Pi のホームからの相対パス
+SERVICE="ytmusic-server"     # systemd のユニット名
 
 # 鍵を指定されていれば ssh と rsync の両方に効かせる
 SSH_CMD=(ssh)
@@ -60,5 +71,12 @@ fi
 "${SSH_CMD[@]}" "$TARGET" "mkdir -p ~/$DEST"
 rsync -az --delete -e "${SSH_CMD[*]}" "${EXCLUDES[@]}" "$SRC/" "$TARGET:~/$DEST/"
 
-echo "==> Pi 側のセットアップを実行"
-"${SSH_CMD[@]}" -t "$TARGET" "chmod +x ~/$DEST/setup-pi.sh && ~/$DEST/setup-pi.sh"
+if [[ $CODE_ONLY -eq 1 ]]; then
+    echo "==> サービスを再起動"
+    "${SSH_CMD[@]}" "$TARGET" "sudo -n systemctl restart $SERVICE"
+    sleep 2
+    "${SSH_CMD[@]}" "$TARGET" "systemctl is-active $SERVICE"
+else
+    echo "==> Pi 側のセットアップを実行"
+    "${SSH_CMD[@]}" -t "$TARGET" "chmod +x ~/$DEST/setup-pi.sh && ~/$DEST/setup-pi.sh"
+fi

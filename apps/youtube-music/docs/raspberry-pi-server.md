@@ -70,10 +70,19 @@ cd apps/youtube-music
 
 - **セットアップの後半は `sudo` を使う**（systemd ユニットの更新）。
   パスワードの入力が要るので、対話できる端末から実行すること。
-  コードだけを入れ替えたい場合は、転送後にサービスを再起動すれば足りる:
+- **2 回目以降、コードだけ入れ替えるなら `--code-only`**。
+  転送してサービスを再起動するだけで、セットアップ全体は走らせない:
 
   ```bash
-  ssh <user>@<host> 'sudo systemctl restart ytmusic-server'
+  PSPGO_SSH_KEY=~/.ssh/<鍵> ./deploy-pi.sh <user>@<host> --code-only
+  ```
+
+  再起動だけをパスワード無しで許可しておくと、この形が最後まで通る
+  （許可する範囲はこの 1 サービスの再起動と状態確認だけに絞る）:
+
+  ```bash
+  echo "<user> ALL=(root) NOPASSWD: /usr/bin/systemctl restart ytmusic-server" | sudo tee /etc/sudoers.d/ytmusic-server
+  sudo chmod 440 /etc/sudoers.d/ytmusic-server
   ```
 - `MemoryMax` は Pi の搭載メモリから自動で決まる（1GB機なら 600M、4GB機なら 1500M）
 
