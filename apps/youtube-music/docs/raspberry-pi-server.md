@@ -45,7 +45,44 @@ Cookie の持ち込みが必要で、後者はアカウント停止のリスク�
   24時間稼働で microSD が壊れるのを避けたい場合の選択肢
 - 有線 LAN が使えるならそちらを選ぶ（Pi 3 と違い USB 経由ではない本物のギガビット）
 
-## セットアップ
+## セットアップ（自動・推奨）
+
+Mac から 1 コマンドで配置とセットアップができる。**リポジトリは private なので
+Pi から `git clone` はしない**（Pi に GitHub の認証情報を置かずに済むよう、
+必要な `server/` だけを rsync で送る方式にしてある）。
+
+```bash
+cd apps/youtube-music
+./deploy-pi.sh <user>@<PiのIPまたはホスト名>       # 例: ./deploy-pi.sh pi@192.168.0.50
+```
+
+やること: `server/` を Pi の `~/pspgo-server/` へ転送 → [../server/setup-pi.sh](../server/setup-pi.sh)
+を実行（apt 導入・venv 構築・systemd 常駐・yt-dlp 週次更新タイマー・起動確認）→
+最後に **PSP の `server.txt` に書くべき IP アドレスを表示**する。
+
+- 何度実行しても同じ結果になる。コードを直したら同じコマンドで更新できる
+- `--no-auth` を付けると認証ファイル（`auth/`）を送らない（一般向けフィードで動作）
+- `MemoryMax` は Pi の搭載メモリから自動で決まる（1GB機なら 600M、4GB機なら 1500M）
+
+### 名前解決の注意（`.local` は PSP から使えない）
+
+Mac からは `xxx.local` で繋がるが、**PSP クライアントは DNS も mDNS も引かない**
+（`net.c` が IPv4 アドレスを直接パースする実装）。
+`server.txt` には**必ず IP アドレスを書く**こと。だから Pi の IP は固定しておく。
+
+### 再インストールしたときの SSH 警告
+
+同じホスト名で OS を焼き直すと、ホスト鍵が変わるため
+`REMOTE HOST IDENTIFICATION HAS CHANGED` で接続を拒否される。
+**新しい Pi であることが確実な場合のみ**古い鍵を消す:
+
+```bash
+ssh-keygen -R <ホスト名>      # 例: ssh-keygen -R raspberrypi.local
+```
+
+## セットアップ（手動）
+
+`deploy-pi.sh` が使えない場合や、中で何をしているかを確認したい場合の手順。
 
 ### 1. OS と依存パッケージ
 
