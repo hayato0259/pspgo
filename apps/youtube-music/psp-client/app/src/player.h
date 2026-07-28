@@ -19,7 +19,15 @@ int player_global_init(void);
 
 /* video_id のストリーム再生を開始 (既存の再生は停止される)。0=成功
    duration_hint_sec は終端検知の補助 (不明なら 0) */
-int player_start(const char *video_id, int duration_hint_sec);
+/* start_sec から再生する (0 = 先頭)。シークはこの引数で行う */
+int player_start(const char *video_id, int duration_hint_sec, int start_sec);
+
+/*
+ * 1 を渡すと、受信は続けたまま音を鳴らし始めない。
+ * 映像の用意が整うまで音を進めないために使う
+ * (先に音だけ進むと、映像が追いつくまで早送りに見えるため)。
+ */
+void player_gate(int hold);
 
 void player_stop(void);
 void player_toggle_pause(void);

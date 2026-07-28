@@ -23,8 +23,8 @@ typedef enum {
     VIDEO_ERROR
 } VideoState;
 
-/* 再生を始める。seconds は曲の長さ (0 なら不明として扱う)。0=成功 */
-int video_start(const char *video_id, int seconds);
+/* 再生を始める。seconds は曲の長さ、start_sec は開始位置 (0 = 先頭)。0=成功 */
+int video_start(const char *video_id, int seconds, int start_sec);
 void video_stop(void);
 
 VideoState video_state(void);

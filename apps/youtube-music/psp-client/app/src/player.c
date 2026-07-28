@@ -36,6 +36,8 @@ static volatile int g_last_error = 0;
 static char g_video_id[24];
 static char g_file_path[128];              /* ローカル再生時のパス ("" = 配信) */
 static volatile int g_duration_hint = 0;   /* 曲の長さ (秒)。0 = 不明 */
+static volatile int g_start_sec = 0;       /* シークで始めた位置 (秒) */
+static volatile int g_gate = 0;            /* 1 = 受信は続けるが音は出さない */
 static SceUID g_thread = -1;
 static volatile int g_thread_running = 0;
 
@@ -82,7 +84,9 @@ void player_stop(void)
     g_state = PLAYER_STOPPED;
 }
 
-int player_start(const char *video_id, int duration_hint_sec)
+void player_gate(int hold) { g_gate = hold ? 1 : 0; }
+
+int player_start(const char *video_id, int duration_hint_sec, int start_sec)
 {
     player_stop();
 
@@ -102,6 +106,7 @@ int player_start(const char *video_id, int duration_hint_sec)
     }
 
     g_duration_hint = duration_hint_sec;
+    g_start_sec = start_sec > 0 ? start_sec : 0;
     g_cmd_stop = 0;
     g_paused = 0;
     g_frames = 0;
@@ -129,13 +134,13 @@ int player_last_error(void) { return g_last_error; }
 
 int player_elapsed_sec(void)
 {
-    /* 1152 サンプル/フレーム, 44100Hz */
-    return (int)((long long)g_frames * 1152 / 44100);
+    /* 1152 サンプル/フレーム, 44100Hz。シークした場合はその位置を足す */
+    return g_start_sec + (int)((long long)g_frames * 1152 / 44100);
 }
 
 int player_elapsed_ms(void)
 {
-    return (int)((long long)g_frames * 1152 * 1000 / 44100);
+    return g_start_sec * 1000 + (int)((long long)g_frames * 1152 * 1000 / 44100);
 }
 
 static int fail(int sock, FILE *fp, int handle, int src_reserved, int code)
@@ -180,7 +185,8 @@ static int decode_body(SceSize args, void *argp)
         }
     } else {
         char base_path[96], path[224];
-        snprintf(base_path, sizeof(base_path), "/stream?yt=%s", g_video_id);
+        snprintf(base_path, sizeof(base_path), "/stream?yt=%s&t=%d",
+                 g_video_id, g_start_sec);
         if (net_build_path(path, sizeof(path), base_path) < 0) {
             g_last_error = -1;
             g_state = PLAYER_ERROR;
@@ -256,6 +262,12 @@ static int decode_body(SceSize args, void *argp)
                 return fail(sock, fp, handle, src_reserved, rc);
             inited = 1;
             g_state = PLAYER_PLAYING;
+        }
+
+        if (g_gate) {
+            /* 映像の用意待ち。受信は続けているので、開いた瞬間に鳴り始められる */
+            sceKernelDelayThread(10 * 1000);
+            continue;
         }
 
         short *out = NULL;

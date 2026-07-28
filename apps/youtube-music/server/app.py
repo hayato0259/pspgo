@@ -14,8 +14,8 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
   GET /api/login/start       ログイン開始: code\t<入力コード> / url\t<URL> / interval\t<秒>
   GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
   GET /api/logout            トークン破棄
-  GET /stream?yt=<videoId>   音声を MP3 CBR 128kbps で配信
-  GET /video?yt=<videoId>&sec=<秒>  映像を PSMF (H.264 Baseline 480x272) で配信
+  GET /stream?yt=<videoId>&t=<秒>  音声を MP3 CBR 128kbps で配信 (t = 頭出し位置)
+  GET /video?yt=<videoId>&sec=<長さ>&t=<秒>  映像を PSMF (H.264 Baseline 480x272) で配信
   GET /stream?file=<path>    ローカルファイルを変換して配信 (検証用)
 
 ログイン: Google 公式の OAuth デバイスコードフロー (テレビ・ゲーム機と同じ方式) を使う。
@@ -362,10 +362,12 @@ def parse_len(s) -> int:
         return 0
 
 
-def ffmpeg_cmd(src: str) -> list:
+def ffmpeg_cmd(src: str, start_sec: int = 0) -> list:
+    seek = ["-ss", str(start_sec)] if start_sec > 0 else []
     return [
         "ffmpeg", "-hide_banner", "-loglevel", "error",
         "-i", src,
+        *seek,          # 入力の後に置く = デコードして読み飛ばす形の頭出し
         "-vn",
         "-c:a", "libmp3lame", "-b:a", BITRATE, "-ar", "44100", "-ac", "2",
         "-f", "mp3", "pipe:1",
@@ -427,7 +429,7 @@ def psmf_header(stream_size: int, seconds: int) -> bytes:
     return bytes(h)
 
 
-def video_procs(video_id: str):
+def video_procs(video_id: str, start_sec: int = 0):
     """yt-dlp → ffmpeg をつないで MPEG プログラムストリームを吐かせる。
 
     映像と音声が 1 本にまとまった 360p の形式 (itag 18) を優先する。
@@ -450,6 +452,7 @@ def video_procs(video_id: str):
         [
             "ffmpeg", "-hide_banner", "-loglevel", "error",
             "-i", "pipe:0",
+            *(["-ss", str(start_sec)] if start_sec > 0 else []),
             "-an",
             "-c:v", "libx264",
             "-profile:v", "baseline",      # PSP はこれしかデコードできない
@@ -472,6 +475,14 @@ def video_procs(video_id: str):
     )
     ydl.stdout.close()
     return ydl, ff
+
+
+def query_int(q: dict, key: str) -> int:
+    """クエリの整数値を取り出す。無い・壊れているなら 0。"""
+    try:
+        return max(0, int(q.get(key, ["0"])[0] or 0))
+    except (ValueError, TypeError):
+        return 0
 
 
 def read_exact(stream, size: int) -> bytes:
@@ -895,7 +906,7 @@ class Handler(BaseHTTPRequestHandler):
                 seconds = int(q.get("sec", ["0"])[0] or 0)
             except ValueError:
                 seconds = 0
-            ydl, ff = video_procs(q["yt"][0])
+            ydl, ff = video_procs(q["yt"][0], query_int(q, "t"))
             self._stream_psmf([ydl, ff], ff, seconds, source=ydl)
             return
 
@@ -915,7 +926,8 @@ class Handler(BaseHTTPRequestHandler):
                 stderr=subprocess.PIPE,
             )
             ff = subprocess.Popen(
-                ffmpeg_cmd("pipe:0"), stdin=ydl.stdout, stdout=subprocess.PIPE
+                ffmpeg_cmd("pipe:0", query_int(q, "t")),
+                stdin=ydl.stdout, stdout=subprocess.PIPE
             )
             ydl.stdout.close()
             self._stream_process([ydl, ff], ff, source=ydl)

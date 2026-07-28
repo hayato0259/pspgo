@@ -200,6 +200,18 @@ static const ApiCounterpart *g_counterpart = NULL;  /* 取得済みなら中身�
 static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
 static int g_counterpart_msg_frames = 0;  /* 切り替えできない旨の表示時間 */
 static char g_video_for[24] = "";         /* 映像を受け取っている videoId */
+static int g_gate_frames = 0;             /* 映像待ちで音を止めている時間 */
+
+static void video_release(void);
+
+/* 動画再生中の操作パネルは、しばらく触らなければ引っ込める */
+#define CONTROLS_SHOW_FRAMES 180          /* 約3秒 */
+static int g_controls_frames = CONTROLS_SHOW_FRAMES;
+
+/* シークは連打をまとめてから実行する (1 回ごとに配信を開き直すため) */
+static int g_seek_pending = 0;
+static int g_seek_target = 0;
+static int g_seek_frames = 0;
 
 /* 動画版を再生しているときだけ映像も受け取る。
    曲版に戻ったり別の画面へ移ったら止める (通信と Media Engine を無駄に使わない) */
@@ -208,11 +220,70 @@ static void video_sync(const ApiTrack *t)
     int want = (t && g_counterpart && g_counterpart->current_is_video && g_net_ok);
     if (want && strcmp(g_video_for, t->video_id) != 0) {
         snprintf(g_video_for, sizeof(g_video_for), "%s", t->video_id);
-        video_start(t->video_id, t->duration_sec);
+        video_start(t->video_id, t->duration_sec, player_elapsed_sec());
+        /*
+         * 映像の用意は音より時間がかかる (サーバーが変換を始めるまでの間がある)。
+         * 先に音だけ進めると、映像が追いつくまで早送りに見えるので、
+         * 最初のフレームが出るまで音を止めておく。
+         */
+        player_gate(1);
+        g_gate_frames = 0;
     } else if (!want && g_video_for[0]) {
         video_stop();
         g_video_for[0] = '\0';
     }
+
+    if (!g_video_for[0]) {
+        player_gate(0);
+        return;
+    }
+
+    VideoState vs = video_state();
+    g_gate_frames++;
+    /* 映像が出た / 出ないと分かった / 待ちすぎた のいずれかで音を解禁する */
+    if (vs == VIDEO_PLAYING || vs == VIDEO_ERROR || vs == VIDEO_FINISHED ||
+        g_gate_frames > 60 * 20)
+        player_gate(0);
+}
+
+/*
+ * シーク。押すたびに配信を開き直すことになるので、
+ * 連打が止まってからまとめて 1 回だけ実行する。
+ */
+static void seek_by(int delta_sec)
+{
+    if (g_playing_index < 0 || g_playing_index >= g_track_count)
+        return;
+    const ApiTrack *t = &g_tracks[g_playing_index];
+    int base = g_seek_pending ? g_seek_target : player_elapsed_sec();
+    int pos = base + delta_sec;
+    if (t->duration_sec > 0 && pos > t->duration_sec - 3)
+        pos = t->duration_sec - 3;
+    if (pos < 0)
+        pos = 0;
+    g_seek_target = pos;
+    g_seek_pending = 1;
+    g_seek_frames = 30;          /* 0.5 秒 追加の入力が無ければ実行 */
+}
+
+static void seek_tick(void)
+{
+    if (!g_seek_pending)
+        return;
+    if (--g_seek_frames > 0)
+        return;
+    g_seek_pending = 0;
+    if (g_playing_index < 0 || g_playing_index >= g_track_count)
+        return;
+    const ApiTrack *t = &g_tracks[g_playing_index];
+    video_release();             /* 映像も同じ位置から取り直す */
+    player_start(t->video_id, t->duration_sec, g_seek_target);
+}
+
+/* 画面に出す再生位置。シーク操作中は移動先を見せる */
+static int display_elapsed_sec(void)
+{
+    return g_seek_pending ? g_seek_target : player_elapsed_sec();
 }
 
 static void video_release(void)
@@ -1230,7 +1301,7 @@ static void start_track(int index)
     g_playing_index = index;
     if (g_play_mode == PLAY_MODE_SHUFFLE)
         shuffle_mark_played(index);
-    player_start(g_tracks[index].video_id, g_tracks[index].duration_sec);
+    player_start(g_tracks[index].video_id, g_tracks[index].duration_sec, 0);
 }
 
 /* --- 曲版 / ミュージックビデオ版の切り替え ------------------------------- */
@@ -1532,13 +1603,18 @@ static int replace_queue_with_radio(void)
  */
 static void video_overlay(const ApiTrack *t, PlayerState st)
 {
+    /* 触っていなければ引っ込める。映像を隠さないため */
+    if (g_controls_frames <= 0)
+        return;
+    g_controls_frames--;
+
     draw_rect(0, 0, SCR_W, 24, 0xB0000000);
     draw_rect(0, SCR_H - 52, SCR_W, 52, 0xB0000000);
 
     if (t) {
         text_clipped(MARGIN, 17, SCR_W - MARGIN * 2, C_TEXT, 0.6f, t->title);
 
-        int elapsed = player_elapsed_sec();
+        int elapsed = display_elapsed_sec();
         char tm[32];
         if (t->duration_sec > 0) {
             snprintf(tm, sizeof(tm), "%d:%02d / %d:%02d",
@@ -1548,6 +1624,7 @@ static void video_overlay(const ApiTrack *t, PlayerState st)
             if (w > SCR_W - 48) w = SCR_W - 48;
             draw_rect(24, SCR_H - 40, SCR_W - 48, 3, C_LINE);
             draw_rect(24, SCR_H - 40, w, 3, C_ACCENT);
+            gfx_card_fill(24 + w - 4, SCR_H - 43, 9, 0xFFFFFFFF);
         } else {
             snprintf(tm, sizeof(tm), "%d:%02d", elapsed / 60, elapsed % 60);
         }
@@ -1591,26 +1668,20 @@ static Screen screen_player_tick(void)
     counterpart_refresh((g_playing_index >= 0 && g_playing_index < g_track_count)
                         ? g_tracks[g_playing_index].video_id : NULL);
 
-    if ((g_pressed & PSP_CTRL_UP) &&
-        g_playing_index >= 0 && g_playing_index < g_track_count) {
-        snd_play(SND_OK);
-        g_lyrics_scroll = 0;
-        return SCR_LYRICS;
-    }
+    /* 何か操作したら操作パネルを出し直す (動画再生中は放っておくと消える) */
+    if (g_pressed)
+        g_controls_frames = CONTROLS_SHOW_FRAMES;
+
     if (g_pressed & PSP_CTRL_CROSS) {
         snd_play(SND_CANCEL);
         video_release();
         return SCR_PLAYLIST;
     }
-    if (g_pressed & PSP_CTRL_TRIANGLE) {
+    if (g_pressed & PSP_CTRL_CIRCLE) {
         snd_play(SND_OK);
         player_toggle_pause();
     }
-    if (g_pressed & PSP_CTRL_SELECT) {
-        snd_play(SND_OK);
-        cycle_play_mode();
-    }
-    if (g_pressed & PSP_CTRL_CIRCLE) {
+    if (g_pressed & PSP_CTRL_TRIANGLE) {
         if (counterpart_switch() == 0) {
             snd_play(SND_OK);
             st = player_state();
@@ -1618,11 +1689,17 @@ static Screen screen_player_tick(void)
             g_counterpart_msg_frames = 120;
         }
     }
-    if (g_pressed_edge & PSP_CTRL_DOWN) {
-        snd_play(SND_OK);
-        cycle_sleep_timer();
-    }
     if ((g_pressed & PSP_CTRL_SQUARE) &&
+        g_playing_index >= 0 && g_playing_index < g_track_count) {
+        snd_play(SND_OK);
+        g_lyrics_scroll = 0;
+        return SCR_LYRICS;
+    }
+    if (g_pressed & (PSP_CTRL_LEFT | PSP_CTRL_RIGHT)) {
+        snd_play(SND_MOVE);
+        seek_by((g_pressed & PSP_CTRL_RIGHT) ? 10 : -10);
+    }
+    if ((g_pressed_edge & PSP_CTRL_UP) &&
         g_playing_index >= 0 && g_playing_index < g_track_count) {
         if (replace_queue_with_radio() == 0) {
             g_radio_error_frames = 0;
@@ -1631,6 +1708,15 @@ static Screen screen_player_tick(void)
             g_radio_error_frames = 150;
         }
     }
+    if (g_pressed & PSP_CTRL_SELECT) {
+        snd_play(SND_OK);
+        cycle_play_mode();
+    }
+    if (g_pressed_edge & PSP_CTRL_DOWN) {
+        snd_play(SND_OK);
+        cycle_sleep_timer();
+    }
+    seek_tick();
     if (g_pressed & (PSP_CTRL_LTRIGGER | PSP_CTRL_RTRIGGER)) {
         int index = -1;
         if (g_play_mode == PLAY_MODE_SHUFFLE) {
@@ -1672,7 +1758,7 @@ static Screen screen_player_tick(void)
     ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
     ui_frame_begin();
     ui_chrome("再生中",
-              "↑: 歌詞  ↓: タイマー  △: 一時停止  ○: 曲/動画  □: ラジオ  L/R: 前後  SELECT: 再生モード  ×: 一覧",
+              "○: 再生/一時停止  △: 曲/動画  □: 歌詞  ←→: シーク  L/R: 前後  ↑: ラジオ  ↓: タイマー  SELECT: 再生モード  ×: 一覧",
               g_auth, g_account);
     if (t) {
         /* 左に大きなアートワーク (柔らかい影のみ、枠なし)、右に曲情報 */
@@ -1725,7 +1811,7 @@ static Screen screen_player_tick(void)
         }
 
         /* 進捗バー (細いトラック + 赤 + 角丸のつまみ) */
-        int elapsed = player_elapsed_sec();
+        int elapsed = display_elapsed_sec();
         char tm[32];
         if (t->duration_sec > 0) {
             snprintf(tm, sizeof(tm), "%d:%02d / %d:%02d",

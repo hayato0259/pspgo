@@ -40,6 +40,7 @@ static volatile int g_thread_running = 0;
 
 static char g_video_id[24];
 static int g_seconds;
+static int g_start_sec;   /* シークで始めた位置 (秒) */
 static SceUID g_thread = -1;
 static int g_sock = -1;
 
@@ -105,8 +106,8 @@ static int recv_thread(SceSize args, void *argp)
     g_thread_running = 1;
 
     char base_path[128], path[256];
-    snprintf(base_path, sizeof(base_path), "/video?yt=%s&sec=%d",
-             g_video_id, g_seconds);
+    snprintf(base_path, sizeof(base_path), "/video?yt=%s&sec=%d&t=%d",
+             g_video_id, g_seconds, g_start_sec);
     if (net_build_path(path, sizeof(path), base_path) < 0) {
         g_last_error = -1;
         g_state = VIDEO_ERROR;
@@ -228,12 +229,13 @@ static void mpeg_teardown(void)
 
 /* --- 公開関数 ----------------------------------------------------------- */
 
-int video_start(const char *video_id, int seconds)
+int video_start(const char *video_id, int seconds, int start_sec)
 {
     video_stop();
 
     snprintf(g_video_id, sizeof(g_video_id), "%s", video_id);
     g_seconds = seconds;
+    g_start_sec = start_sec > 0 ? start_sec : 0;
     g_rx_head = g_rx_tail = 0;
     g_rx_eof = 0;
     g_frames = 0;
@@ -326,6 +328,7 @@ int video_decode(void *draw_buf)
     g_pts_ms = (int)(((long long)g_au.iPts - 90000) / 90);
     if (g_pts_ms < 0)
         g_pts_ms = 0;
+    g_pts_ms += g_start_sec * 1000;   /* シークした場合はその位置を足す */
 
     g_frames++;
     g_state = VIDEO_PLAYING;
