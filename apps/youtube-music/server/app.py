@@ -18,7 +18,7 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
   GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
   GET /api/logout            トークン破棄
   GET /stream?yt=<videoId>&t=<秒>  音声を MP3 CBR 128kbps で配信 (t = 頭出し位置)
-  GET /video?yt=<videoId>&sec=<長さ>&t=<秒>&low=0|1  映像を PSMF (H.264 Baseline 480x272) で配信
+  GET /video?yt=<videoId>&sec=<長さ>&t=<秒>  映像を PSMF (H.264 Baseline 480x272) で配信
   GET /stream?file=<path>    ローカルファイルを変換して配信 (検証用)
 
 ログイン: Google 公式の OAuth デバイスコードフロー (テレビ・ゲーム機と同じ方式) を使う。
@@ -403,7 +403,6 @@ VIDEO_W = 480          # PSP の画面
 VIDEO_H = 272
 VIDEO_FPS = 24         # 30 だと Media Engine が間に合わない可能性があるため控えめに
 VIDEO_BITRATE = 400_000
-VIDEO_BITRATE_LOW = 200_000   # 「画質: 低」。解像度は変えずビットレートだけ落とす
 PSMF_HEADER_SIZE = 2048
 PACK_SIZE = 2048
 PTS_HZ = 90000
@@ -454,20 +453,14 @@ def ytdlp_cmd(*args: str) -> list:
     return cmd + list(args)
 
 
-def video_procs(video_id: str, start_sec: int = 0, low: int = 0):
+def video_procs(video_id: str, start_sec: int = 0):
     """yt-dlp → ffmpeg をつないで MPEG プログラムストリームを吐かせる。
-
-    low=1 は「画質: 低」。**解像度とフレーム数は変えない。**
-    PSP 側は 480x272 固定で受け取る作りで、PSMF の見出しにも書き込むため、
-    ここを変えるとクライアントの前提が崩れる。回線が細いときに
-    途切れにくくするのが目的なので、ビットレートだけを落とす。
 
     映像と音声が 1 本にまとまった 360p の形式 (itag 18) を優先する。
     映像だけの形式は分割配信で、標準出力へ流し込む取り方だと
     403 で弾かれるため使えない (音声側で m4a を優先しているのと同じ理由)。
     音声はここでは捨てる。元が 640x360 でも 480x272 に縮めるので画質に影響はない。
     """
-    bitrate = VIDEO_BITRATE_LOW if low else VIDEO_BITRATE
     url = video_id
     if not url.startswith("http"):
         url = f"https://music.youtube.com/watch?v={video_id}"
@@ -494,9 +487,9 @@ def video_procs(video_id: str, start_sec: int = 0, low: int = 0):
             "-r", str(VIDEO_FPS),
             "-g", str(VIDEO_FPS),          # 1 秒ごとに I フレーム
             "-bf", "0",                    # Baseline は B フレームを持てない
-            "-b:v", str(bitrate),
-            "-maxrate", str(bitrate),
-            "-bufsize", str(bitrate),
+            "-b:v", str(VIDEO_BITRATE),
+            "-maxrate", str(VIDEO_BITRATE),
+            "-bufsize", str(VIDEO_BITRATE),
             "-preload", "1000000",         # 最初の表示時刻を 90000 に合わせる
             "-f", "vob", "-packetsize", str(PACK_SIZE),
             "pipe:1",
@@ -1035,8 +1028,7 @@ class Handler(BaseHTTPRequestHandler):
                 seconds = int(q.get("sec", ["0"])[0] or 0)
             except ValueError:
                 seconds = 0
-            ydl, ff = video_procs(q["yt"][0], query_int(q, "t"),
-                                  query_int(q, "low"))
+            ydl, ff = video_procs(q["yt"][0], query_int(q, "t"))
             self._stream_psmf([ydl, ff], ff, seconds, source=ydl)
             return
 

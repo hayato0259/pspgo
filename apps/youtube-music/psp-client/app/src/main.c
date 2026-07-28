@@ -232,12 +232,10 @@ static int g_menu_sel = 0;
  *
  * ボタンの並びはテレビ版から「チャンネル情報・コメント・Gemini」を抜いたもの。
  * 左に再生の操作、右に曲そのものへの操作を寄せる。
- * 「画質」は映像を流しているときにしか意味がないので、
- * 音だけで聴いているときは設定のボタンごと出さない。
  */
 typedef enum {
-    BTN_PREV = 0, BTN_PLAY, BTN_NEXT,                        /* 左寄せ */
-    BTN_LIKE, BTN_DISLIKE, BTN_SAVE, BTN_VIEW, BTN_SETTINGS, /* 右寄せ */
+    BTN_PREV = 0, BTN_PLAY, BTN_NEXT,          /* 左寄せ */
+    BTN_LIKE, BTN_DISLIKE, BTN_SAVE, BTN_VIEW, /* 右寄せ */
     BTN_COUNT
 } PlayerBtn;
 #define BTN_RIGHT_FIRST BTN_LIKE
@@ -257,15 +255,24 @@ static int g_panel_btn = BTN_PLAY;
 static int g_queue_sel = 0;
 
 /* パネルから開くシート (0=出していない) */
-typedef enum { SHEET_NONE = 0, SHEET_VIEW, SHEET_SETTINGS } PlayerSheet;
+typedef enum { SHEET_NONE = 0, SHEET_VIEW } PlayerSheet;
 #ifdef DEMO_SHEET
 static int g_sheet = DEMO_SHEET;
 #else
 static int g_sheet = SHEET_NONE;
 #endif
 static int g_sheet_sel = 0;
-static int g_low_quality = 0;         /* 画質: 0=標準 1=低 */
 static int g_save_error_frames = 0;   /* 保存に失敗した旨の表示時間 */
+
+/*
+ * 再生できない曲は自動で次へ送る (本家も 1 曲で止まらない)。
+ * Premium 限定として配信されている音源は Cookie が無いと取得できず、
+ * そのままだとキューがそこで止まってしまう。
+ * ただし全部失敗するときに延々と送り続けないよう、連続失敗に上限を設ける。
+ */
+#define FAIL_SKIP_LIMIT 3
+static int g_fail_frames = 0;    /* エラー表示を続けた時間。-1 = この曲は送り済み */
+static int g_fail_streak = 0;    /* 連続で再生できなかった数 */
 
 /*
  * パネルの出入りのアニメーション。
@@ -582,6 +589,48 @@ static int section_compact(const Section *s)
 }
 
 /* 現在選択されているカード。無ければ NULL */
+/*
+ * 単曲を選んだときのキュー。
+ *
+ * 本家は 1 曲を選ぶと、その曲から続くミックスがそのまま流れる。
+ * 選んだ 1 曲だけをキューにすると、終わった時点で止まり
+ * 画面下の「次の曲」も出ない。ラジオを取ってキューにする。
+ * 取れなかったときはその 1 曲だけで再生する (再生自体は妨げない)。
+ */
+static void queue_from_single(const ApiItem *item)
+{
+    ApiTrack first;
+    memset(&first, 0, sizeof(first));
+    /* videoId は 11 文字。ApiItem の id 枠 (64) より狭いので明示的に切る */
+    snprintf(first.video_id, sizeof(first.video_id), "%.23s", item->id);
+    snprintf(first.title, sizeof(first.title), "%s", item->title);
+    snprintf(first.artist, sizeof(first.artist), "%s", item->subtitle);
+
+    int n = api_radio(item->id, g_pl_title, sizeof(g_pl_title),
+                      g_tracks, API_MAX_TRACKS);
+    if (n <= 0) {
+        g_tracks[0] = first;
+        g_track_count = 1;
+        snprintf(g_pl_title, sizeof(g_pl_title), "%s", item->title);
+    } else {
+        g_track_count = n;
+        /* 先頭が選んだ曲でなければ差し込む (ラジオは別の曲から始まることがある) */
+        if (strcmp(g_tracks[0].video_id, item->id) != 0) {
+            if (g_track_count > API_MAX_TRACKS - 1)
+                g_track_count = API_MAX_TRACKS - 1;
+            memmove(&g_tracks[1], &g_tracks[0],
+                    (size_t)g_track_count * sizeof(ApiTrack));
+            g_tracks[0] = first;
+            g_track_count++;
+        }
+    }
+    g_track_sel = 0;
+    g_track_scroll = 0;
+    g_playing_index = -1;
+    shuffle_history_reset();
+    start_track(0);
+}
+
 static ApiItem *selected_card(void)
 {
     if (g_section_sel < 0 || g_section_sel >= g_section_count)
@@ -721,12 +770,16 @@ static Screen screen_connect_tick(void)
 #ifndef DEMO_ARTIST
 #define DEMO_ARTIST ""
 #endif
-    g_track_count = 1;
-    snprintf(g_tracks[0].video_id, sizeof(g_tracks[0].video_id), "%s", DEMO_TRACK);
-    snprintf(g_tracks[0].title, sizeof(g_tracks[0].title), "%s", DEMO_TITLE);
-    snprintf(g_tracks[0].artist, sizeof(g_tracks[0].artist), "%s", DEMO_ARTIST);
-    g_tracks[0].duration_sec = 0;
-    start_track(0);
+    /* 単曲を選んだときと同じ道を通す (キューの作り方まで確認できる) */
+    {
+        ApiItem it;
+        memset(&it, 0, sizeof(it));
+        it.kind = 'V';
+        snprintf(it.id, sizeof(it.id), "%s", DEMO_TRACK);
+        snprintf(it.title, sizeof(it.title), "%s", DEMO_TITLE);
+        snprintf(it.subtitle, sizeof(it.subtitle), "%s", DEMO_ARTIST);
+        queue_from_single(&it);
+    }
     return SCR_PLAYER;
 #endif
 
@@ -986,17 +1039,7 @@ static Screen screen_home_tick(void)
                 return SCR_PLAYLIST;
             }
         } else if (cur->kind == 'V') {
-            /* 単曲: 1 曲だけのプレイリストとして扱う */
-            snprintf(g_pl_title, sizeof(g_pl_title), "%s", cur->title);
-            snprintf(g_tracks[0].video_id, sizeof(g_tracks[0].video_id), "%s", cur->id);
-            snprintf(g_tracks[0].title, sizeof(g_tracks[0].title), "%s", cur->title);
-            snprintf(g_tracks[0].artist, sizeof(g_tracks[0].artist), "%s", cur->subtitle);
-            g_tracks[0].duration_sec = 0;
-            g_track_count = 1;
-            g_track_sel = 0;
-            g_playing_index = -1;
-            shuffle_history_reset();
-            start_track(0);
+            queue_from_single(cur);
             return SCR_PLAYER;
         }
     }
@@ -1283,21 +1326,8 @@ static Screen screen_search_tick(void)
                 return SCR_PLAYLIST;
             }
         } else {
-            snprintf(g_pl_title, sizeof(g_pl_title), "%s", cur->title);
-            snprintf(g_tracks[0].video_id, sizeof(g_tracks[0].video_id),
-                     "%s", cur->id);
-            snprintf(g_tracks[0].title, sizeof(g_tracks[0].title),
-                     "%s", cur->title);
-            snprintf(g_tracks[0].artist, sizeof(g_tracks[0].artist),
-                     "%s", cur->subtitle);
-            g_tracks[0].duration_sec = 0;
-            g_track_count = 1;
-            g_track_sel = 0;
-            g_track_scroll = 0;
-            g_playing_index = -1;
             g_playlist_from_search = 1;
-            shuffle_history_reset();
-            start_track(0);
+            queue_from_single(cur);
             return SCR_PLAYER;
         }
     }
@@ -1358,6 +1388,7 @@ static void start_track(int index)
         g_lyrics_scroll = 0;
     }
     g_playing_index = index;
+    g_fail_frames = 0;
     if (g_play_mode == PLAY_MODE_SHUFFLE)
         shuffle_mark_played(index);
     player_start(g_tracks[index].video_id, g_tracks[index].duration_sec, 0);
@@ -1847,22 +1878,6 @@ static float panel_rise(void)
     return (1.0f - g_panel_t) * 24.0f;
 }
 
-/*
- * いま出ているボタンを左から順に並べて個数を返す。
- * 「画質」は映像を流しているときにしか意味がないので、
- * 音だけのときは設定のボタンを出さない (押せるのに何も無い状態を作らない)。
- */
-static int panel_button_list(PlayerBtn *out)
-{
-    int n = 0;
-    for (int i = 0; i < BTN_COUNT; i++) {
-        if (i == BTN_SETTINGS && !g_video_for[0])
-            continue;
-        out[n++] = (PlayerBtn)i;
-    }
-    return n;
-}
-
 /* ボタン 1 つ。選んでいるものは白い丸で塗る (テレビ版と同じ) */
 static void panel_button(PlayerBtn id, float x, float y, IconId icon)
 {
@@ -1891,28 +1906,15 @@ static void draw_panel_buttons(PlayerState st)
         disliked ? ICON_THUMB_DOWN_FILL : ICON_THUMB_DOWN,
         saved    ? ICON_BOOKMARK_FILL   : ICON_BOOKMARK,
         ICON_SMART_DISPLAY,
-        ICON_SETTINGS,
     };
 
-    PlayerBtn list[BTN_COUNT];
-    int n = panel_button_list(list);
-    int right = 0;                       /* 右寄せの個数 */
-    for (int i = 0; i < n; i++)
-        if (list[i] >= BTN_RIGHT_FIRST)
-            right++;
-
     float y = (float)PANEL_BTN_Y + panel_rise();
-    int ri = 0;
-    for (int i = 0; i < n; i++) {
-        float x;
-        if (list[i] < BTN_RIGHT_FIRST) {
-            x = (float)(MARGIN + i * PANEL_BTN_STEP);
-        } else {
-            x = (float)(SCR_W - MARGIN - PANEL_BTN -
-                        (right - 1 - ri) * PANEL_BTN_STEP);
-            ri++;
-        }
-        panel_button(list[i], x, y, icons[list[i]]);
+    for (int i = 0; i < BTN_COUNT; i++) {
+        float x = (i < BTN_RIGHT_FIRST)
+            ? (float)(MARGIN + i * PANEL_BTN_STEP)
+            : (float)(SCR_W - MARGIN - PANEL_BTN -
+                      (BTN_COUNT - 1 - i) * PANEL_BTN_STEP);
+        panel_button((PlayerBtn)i, x, y, icons[i]);
     }
 }
 
@@ -2018,11 +2020,11 @@ static void draw_panel(const ApiTrack *t, PlayerState st,
 }
 
 /*
- * パネルから開くシート (表示 / 設定)。
+ * パネルから開くシート (表示)。
  * テレビ版は一覧を左に出して再生中の画面を右に縮める。
  * 480x272 では縮めると何も見えなくなるので、暗くした上に一覧だけ重ねる。
  */
-#define SHEET_MAX_ITEMS 3
+#define SHEET_ITEMS 3
 
 static void draw_sheet(void)
 {
@@ -2032,39 +2034,17 @@ static void draw_sheet(void)
     /* 題名の行と重ならないよう、下地はしっかり暗くする */
     draw_rect(0, 0, SCR_W, SCR_H, 0xE6000000);
 
-    const char *title, *desc = NULL;
-    const char *labels[SHEET_MAX_ITEMS];
-    const char *values[SHEET_MAX_ITEMS] = { NULL, NULL, NULL };
-    int count;
-
-    if (g_sheet == SHEET_VIEW) {
-        title = "表示";
-        desc = "音楽の再生中に画面に表示するものを選びます";
-        labels[0] = "動画";
-        labels[1] = "歌詞";
-        labels[2] = "音声";
-        count = 3;
-    } else {
-        title = "設定";
-        labels[0] = "画質";
-        values[0] = g_low_quality ? "低" : "標準";
-        count = 1;
-    }
-
+    static const char *labels[SHEET_ITEMS] = { "動画", "歌詞", "音声" };
     const int x = MARGIN, w = 260;
-    text_bold(x, 74, C_TEXT, 0.8f, title);
-    if (desc)
-        text(x, 92, C_DIM, 0.52f, desc);
 
-    for (int i = 0; i < count; i++) {
+    text_bold(x, 74, C_TEXT, 0.8f, "表示");
+    text(x, 92, C_DIM, 0.52f, "音楽の再生中に画面に表示するものを選びます");
+
+    for (int i = 0; i < SHEET_ITEMS; i++) {
         int y = 102 + i * 26;
         int sel = (i == g_sheet_sel);
         draw_rect(x, y, w, 22, sel ? C_TEXT : 0x40FFFFFF);
-        unsigned int col = sel ? C_BG : C_TEXT;
-        text(x + 12, y + 16, col, 0.62f, labels[i]);
-        if (values[i])
-            text((float)(x + w - 12) - gfx_text_width(0.62f, values[i]),
-                 y + 16, col, 0.62f, values[i]);
+        text(x + 12, y + 16, sel ? C_BG : C_TEXT, 0.62f, labels[i]);
     }
 }
 
@@ -2166,24 +2146,18 @@ static Screen screen_player_tick(void)
             g_menu_open = 0;
         }
     } else if (g_sheet != SHEET_NONE) {
-        /* --- 表示 / 設定 のシート --- */
-        int count = (g_sheet == SHEET_VIEW) ? 3 : 1;
+        /* --- 「表示」のシート --- */
         if (g_pressed & PSP_CTRL_UP) {
             snd_play(SND_MOVE);
-            g_sheet_sel = (g_sheet_sel + count - 1) % count;
+            g_sheet_sel = (g_sheet_sel + SHEET_ITEMS - 1) % SHEET_ITEMS;
         }
         if (g_pressed & PSP_CTRL_DOWN) {
             snd_play(SND_MOVE);
-            g_sheet_sel = (g_sheet_sel + 1) % count;
+            g_sheet_sel = (g_sheet_sel + 1) % SHEET_ITEMS;
         }
         if (g_pressed & PSP_CTRL_CIRCLE) {
             snd_play(SND_OK);
-            if (g_sheet != SHEET_VIEW) {
-                g_low_quality = !g_low_quality;
-                video_set_low_quality(g_low_quality);
-                /* 流している映像は今の位置から取り直す (音はそのまま) */
-                video_release();
-            } else if (g_sheet_sel == 1) {
+            if (g_sheet_sel == 1) {
                 g_sheet = SHEET_NONE;
                 g_lyrics_scroll = 0;
                 return SCR_LYRICS;
@@ -2221,15 +2195,8 @@ static Screen screen_player_tick(void)
                 snd_play(SND_MOVE);
                 seek_by(d * 10);
             } else if (g_panel_zone == ZONE_BUTTONS) {
-                /* いま出ているボタンの中だけを回る (設定は映像のときだけ出る) */
-                PlayerBtn list[BTN_COUNT];
-                int n = panel_button_list(list);
-                int at = 0;
-                for (int i = 0; i < n; i++)
-                    if (list[i] == g_panel_btn)
-                        at = i;
                 snd_play(SND_MOVE);
-                g_panel_btn = list[(at + n + d) % n];
+                g_panel_btn = (g_panel_btn + BTN_COUNT + d) % BTN_COUNT;
             } else if (g_queue_sel + d >= 0 && g_queue_sel + d < g_track_count) {
                 snd_play(SND_MOVE);
                 g_queue_sel += d;
@@ -2253,7 +2220,6 @@ static Screen screen_player_tick(void)
                     /* いまの状態に合わせて開く (どちらで鳴っているかが分かる) */
                     g_sheet_sel = (g_info && g_info->current_is_video) ? 0 : 2;
                     break;
-                case BTN_SETTINGS: g_sheet = SHEET_SETTINGS; g_sheet_sel = 0; break;
                 case BTN_PREV:     skip_track(0); break;
                 case BTN_NEXT:     skip_track(1); break;
                 default:           player_toggle_pause(); break;
@@ -2315,6 +2281,21 @@ static Screen screen_player_tick(void)
 
     seek_tick();
 
+    /* 再生できない曲は 2 秒ほど理由を出してから次へ送る */
+    if (st == PLAYER_ERROR) {
+        if (g_fail_frames >= 0 && ++g_fail_frames > 120) {
+            g_fail_frames = -1;          /* この曲では二度と送らない */
+            if (g_fail_streak < FAIL_SKIP_LIMIT) {
+                g_fail_streak++;
+                skip_track(1);
+            }
+        }
+    } else {
+        g_fail_frames = 0;
+        if (st == PLAYER_PLAYING)
+            g_fail_streak = 0;
+    }
+
     ApiTrack *t = (g_playing_index >= 0) ? &g_tracks[g_playing_index] : NULL;
 
     /* パネルの出入り。閉じたまま何もしないフレームでも進める */
@@ -2323,9 +2304,6 @@ static Screen screen_player_tick(void)
         g_panel_t += (want - g_panel_t) * 0.22f;
         if (g_panel_t > 0.999f) g_panel_t = 1.0f;
         if (g_panel_t < 0.001f) g_panel_t = 0.0f;
-        /* 映像を止めると設定のボタンが消える。そこに居たら戻す */
-        if (g_panel_btn == BTN_SETTINGS && !g_video_for[0])
-            g_panel_btn = BTN_PLAY;
     }
 
     /* 流れる題名の位置。曲が変わったら先頭に戻す */

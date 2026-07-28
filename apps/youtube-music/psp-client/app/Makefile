@@ -31,7 +31,7 @@ CFLAGS += -DDEMO_ARTIST=$(DEMO_ARTIST)
 endif
 # 操作パネル / シートを出した状態で起動する (エミュレータへ入力を送れないため)
 #   make DEMO_PANEL=1        パネルを開いた状態
-#   make DEMO_SHEET=1        「表示」のシート (2 で「設定」)
+#   make DEMO_SHEET=1        「表示」のシート
 ifdef DEMO_PANEL
 CFLAGS += -DDEMO_PANEL
 endif

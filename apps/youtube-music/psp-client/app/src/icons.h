@@ -33,7 +33,6 @@ typedef enum {
     ICON_WIFI_OFF,
     ICON_BOOKMARK,
     ICON_BOOKMARK_FILL,
-    ICON_SETTINGS,
     ICON_SMART_DISPLAY,
     ICON_COUNT
 } IconId;
