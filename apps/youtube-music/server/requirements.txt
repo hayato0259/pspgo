@@ -7,4 +7,9 @@ Pillow>=10
 # Linux の apt/dnf 版は古く、YouTube 側の変更で壊れるため
 # (Raspberry Pi では systemd の PATH を venv 優先にして使う。
 #  docs/raspberry-pi-server.md 参照)
-yt-dlp>=2025.6
+#
+# [default] を必ず付ける。素の yt-dlp には yt-dlp-ejs が入らず、
+# YouTube の JS チャレンジを解けないため **取得できる形式が消える**。
+# 症状は「Requested format is not available」で、
+# ログインしていても曲が取れず無音になる (実際に踏んだ)
+yt-dlp[default]>=2025.6

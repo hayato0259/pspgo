@@ -89,7 +89,7 @@ Description=Update yt-dlp for ytmusic-server
 [Service]
 Type=oneshot
 User=$SERVICE_USER
-ExecStart=$SERVER_DIR/.venv/bin/pip install -q -U yt-dlp
+ExecStart=$SERVER_DIR/.venv/bin/pip install -q -U 'yt-dlp[default]'
 ExecStartPost=/usr/bin/sudo /bin/systemctl restart ytmusic-server
 EOF
 

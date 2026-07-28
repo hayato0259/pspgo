@@ -263,7 +263,7 @@ Description=Update yt-dlp for ytmusic-server
 
 [Service]
 Type=oneshot
-ExecStart=/home/pi/pspgo/apps/youtube-music/server/.venv/bin/pip install -U yt-dlp
+ExecStart=/home/pi/pspgo/apps/youtube-music/server/.venv/bin/pip install -U 'yt-dlp[default]'
 ExecStartPost=/bin/systemctl restart ytmusic-server
 User=pi
 ```
@@ -335,6 +335,13 @@ cd ~/pspgo/apps/youtube-music/server
     「サーバーが曲を取得できなかった」場合は受信 0 バイトで即座に分かるので、
     ここは途中で詰まった場合だけを見ればよい
   **Mac のサーバーでは再現しない**（変換が実時間より十分速いため）
+- **yt-dlp を素で入れると、ログインしていても曲が取れなくなる。**
+  `pip install yt-dlp` だけでは `yt-dlp-ejs` が入らず、YouTube の
+  JS チャレンジを解けないため**取得できる形式が消える**。
+  エラーは `Requested format is not available` で、原因が読み取れない。
+  **必ず `yt-dlp[default]` で入れる**（requirements.txt と週次更新の
+  両方をそう直してある）。サーバーは起動時にこれを確認して、
+  足りなければ入れ方を出して止まる
 - **電源不足の警告が出た** (`vcgencmd get_throttled` が `0x50005`)。
   Pi 4 は 5V/3A が必要。`0x0` 以外なら電源かケーブルを疑う
 - **ホスト名 `.local` は PSP から使えない**（PSP は DNS も mDNS も引かない）。

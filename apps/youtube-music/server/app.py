@@ -38,6 +38,7 @@ import re
 import shutil
 import subprocess
 import sys
+import tempfile
 import threading
 import time
 import urllib.parse
@@ -435,6 +436,34 @@ def psmf_header(stream_size: int, seconds: int) -> bytes:
     return bytes(h)
 
 
+COOKIES_TMP_DIR = AUTH_DIR / "cookies-tmp"
+
+
+def cookies_copy() -> str:
+    """Cookie の使い捨てコピーを作ってそのパスを返す。無ければ None。
+
+    **yt-dlp は `--cookies` に渡したファイルを書き戻す** (読み込み先であり
+    書き出し先でもある)。しかも `open(file, 'w')` で切り詰めてから書くため、
+    ミュージックビデオのように音と映像で 2 本同時に走らせると、
+    両方が同じファイルを書いて元が壊れる。
+    毎回コピーを渡し、**元のファイルには一切書かせない**。
+
+    後始末はここでまとめてやる。配信が 1 時間続くことはないので、
+    1 時間より古いコピーは消えていて構わない。
+    """
+    if not COOKIES_FILE.exists():
+        return None
+    COOKIES_TMP_DIR.mkdir(parents=True, exist_ok=True)
+    now = time.time()
+    for old in COOKIES_TMP_DIR.iterdir():
+        if now - old.stat().st_mtime > 3600:
+            old.unlink(missing_ok=True)
+    fd, path = tempfile.mkstemp(dir=COOKIES_TMP_DIR, suffix=".txt")
+    with os.fdopen(fd, "wb") as out:
+        out.write(COOKIES_FILE.read_bytes())
+    return path
+
+
 def ytdlp_cmd(*args: str) -> list:
     """yt-dlp のコマンドを組み立てる。
 
@@ -448,8 +477,9 @@ def ytdlp_cmd(*args: str) -> list:
     作り方は docs/raspberry-pi-server.md を参照。
     """
     cmd = ["yt-dlp", "--no-warnings", "-o", "-"]
-    if COOKIES_FILE.exists():
-        cmd += ["--cookies", str(COOKIES_FILE)]
+    jar = cookies_copy()
+    if jar:
+        cmd += ["--cookies", jar]
     return cmd + list(args)
 
 
@@ -1071,6 +1101,17 @@ def main():
                 f"(macOS: brew install {tool} / Debian: apt install {tool}。"
                 f"yt-dlp は .venv/bin/pip install -U yt-dlp でも可)"
             )
+    # yt-dlp は YouTube の JS チャレンジを解くのに yt-dlp-ejs を使う。
+    # これが無いと、**ログインしていても取得できる形式が消え**、
+    # 「Requested format is not available」で無音になる。
+    # 症状がエラーの文面から分かりにくいので起動時に確かめる。
+    try:
+        import yt_dlp_ejs  # noqa: F401
+    except ImportError:
+        sys.exit(
+            "yt-dlp の依存が足りません。次を実行してください:\n"
+            "  .venv/bin/pip install -U 'yt-dlp[default]'"
+        )
     print(f"[server] auth: {'browser.json' if is_authed() else 'なし (一般向けホーム)'}")
     # Cookie の有無で「Premium 限定の曲が再生できるか」が変わる。
     # 後から原因を追えるよう起動時に必ず出す
