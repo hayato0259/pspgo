@@ -61,11 +61,14 @@ void player_stop(void)
          * sceMp3 ハンドルを掴んだままになり、次の再生が
          * 「チャンネル使用中」(0x80268002) で失敗する。
          * 受信待ちは中断できるようにしてあるので、通常は即座に終わる。
+         * ここは描画スレッドから呼ばれるため、長く待つと画面が固まって見える。
+         * 待ちきれなかった場合は新しい再生側でチャンネルを取り直すので、
+         * 上限は短くしてよい。
          */
         int spins = 0;
-        while (g_thread_running && ++spins < 500)   /* 最大5秒 */
+        while (g_thread_running && ++spins < 100)   /* 最大1秒 */
             sceKernelDelayThread(10 * 1000);
-        SceUInt timeout = 1000 * 1000;
+        SceUInt timeout = 200 * 1000;
         sceKernelWaitThreadEnd(g_thread, &timeout);
         if (g_thread_running) {
             /* 最後の手段。強制終了させたうえで資源を明示的に解放する */

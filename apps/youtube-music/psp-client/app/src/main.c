@@ -31,6 +31,7 @@
 #include "store.h"
 #include "dl.h"
 #include "osk.h"
+#include "counterpart.h"
 
 PSP_MODULE_INFO("ytmusic", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -192,8 +193,7 @@ static int g_radio_error_frames = 0;
  * 取得は再生が始まってから 1 曲につき 1 回だけ行う。通信の待ちで描画は止まるが、
  * 音声は別スレッドなので再生は途切れない。
  */
-static ApiCounterpart g_counterpart;
-static char g_counterpart_for[24] = "";   /* 取得済みの videoId */
+static const ApiCounterpart *g_counterpart = NULL;  /* 取得済みなら中身、まだなら NULL */
 static int g_counterpart_msg_frames = 0;  /* 切り替えできない旨の表示時間 */
 static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
@@ -1209,18 +1209,18 @@ static void start_track(int index)
 
 /* --- 曲版 / ミュージックビデオ版の切り替え ------------------------------- */
 
-/* 再生中の曲について、対応する別バージョンを 1 曲につき 1 回だけ問い合わせる */
+/*
+ * 再生中の曲の対応バージョンを、ワーカーに取りに行かせて結果を拾う。
+ * 問い合わせ自体は counterpart.c の別スレッドで走るので、ここでは待たない
+ * (描画スレッドで通信を待つと、その間ボタンも絵も止まってしまう)。
+ */
 static void counterpart_refresh(const char *video_id)
 {
-    if (!video_id || !video_id[0])
-        return;
-    if (strcmp(g_counterpart_for, video_id) == 0)
-        return;
-    if (!g_net_ok)
+    g_counterpart = NULL;
+    if (!video_id || !video_id[0] || !g_net_ok)
         return;   /* オフライン起動時は問い合わせない */
-    snprintf(g_counterpart_for, sizeof(g_counterpart_for), "%s", video_id);
-    if (api_counterpart(video_id, &g_counterpart) < 0)
-        memset(&g_counterpart, 0, sizeof(g_counterpart));
+    counterpart_request(video_id);
+    g_counterpart = counterpart_result(video_id);
 }
 
 /*
@@ -1230,12 +1230,12 @@ static void counterpart_refresh(const char *video_id)
  */
 static int counterpart_switch(void)
 {
-    if (!g_counterpart.has_alt)
+    if (!g_counterpart || !g_counterpart->has_alt)
         return -1;
     if (g_playing_index < 0 || g_playing_index >= g_track_count)
         return -1;
-    g_tracks[g_playing_index] = g_counterpart.alt;
-    g_counterpart_for[0] = '\0';   /* 切り替え先の対応情報を取り直す */
+    g_tracks[g_playing_index] = g_counterpart->alt;
+    g_counterpart = NULL;   /* 切り替え先の対応情報は取り直す */
     start_track(g_playing_index);
     return 0;
 }
@@ -1243,7 +1243,7 @@ static int counterpart_switch(void)
 /* 純正と同じ「曲 / 動画」のトグル。いま再生している側を白く塗って示す */
 static void draw_song_video_toggle(float x, float y)
 {
-    if (!g_counterpart.has_alt)
+    if (!g_counterpart || !g_counterpart->has_alt)
         return;
     static const char *label[2] = { "曲", "動画" };
     const float size = 0.58f;
@@ -1251,7 +1251,7 @@ static void draw_song_video_toggle(float x, float y)
     int i;
     for (i = 0; i < 2; i++) {
         /* i=0 が曲、i=1 が動画。いま再生中の側が選択状態 */
-        int selected = ((i == 1) == (g_counterpart.current_is_video != 0));
+        int selected = ((i == 1) == (g_counterpart->current_is_video != 0));
         float w = gfx_text_width(size, label[i]) + 18.0f;
         draw_rect((int)cx, (int)y - 12, (int)w, 17, selected ? C_TEXT : C_LINE);
         text(cx + 9.0f, y, selected ? C_BG : C_DIM, size, label[i]);
@@ -1504,6 +1504,10 @@ static Screen screen_player_tick(void)
 {
     PlayerState st = player_state();
 
+    /* 対応バージョンの取得結果を先に拾う (○ の判定で使うため) */
+    counterpart_refresh((g_playing_index >= 0 && g_playing_index < g_track_count)
+                        ? g_tracks[g_playing_index].video_id : NULL);
+
     if ((g_pressed & PSP_CTRL_UP) &&
         g_playing_index >= 0 && g_playing_index < g_track_count) {
         snd_play(SND_OK);
@@ -1603,10 +1607,6 @@ static Screen screen_player_tick(void)
          * 通知行。トグルと一時的なお知らせが同じ場所を取り合うため、
          * 重ならないよう優先順位を付けて 1 つだけ描く。
          */
-        /* 再生状態を問わず取りに行く。バッファリング中に済ませておけば
-           再生開始と同時にトグルが出るし、再生に失敗した曲でも
-           もう一方の版に切り替えて試せる */
-        counterpart_refresh(t->video_id);
         if (g_radio_error_frames > 0) {
             text_clipped(tx, 180, SCR_W - tx - 16, C_ACCENT, 0.58f,
                          "ラジオを取得できませんでした");
@@ -1764,6 +1764,7 @@ int main(void)
     art_init();
     snd_init();
     dl_init();
+    counterpart_init();
 
     Screen scr = SCR_CONNECT;
     while (g_running) {

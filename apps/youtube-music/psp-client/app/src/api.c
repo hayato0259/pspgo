@@ -292,6 +292,14 @@ static int cp_line(char **f, int nf, void *vctx)
     return 0;
 }
 
+/*
+ * 応答が数百バイトと小さいので専用の小さなバッファを持つ。
+ * 共有の g_buf / g_error を触らないので、この関数だけは
+ * UI とは別のスレッドから呼んでも他の API 呼び出しと衝突しない
+ * (対応バージョンの問い合わせは背後で走らせるため、この性質が要る)。
+ */
+static char g_cp_buf[1024];
+
 int api_counterpart(const char *video_id, ApiCounterpart *out)
 {
     char path[160];
@@ -299,11 +307,12 @@ int api_counterpart(const char *video_id, ApiCounterpart *out)
         return -1;
     memset(out, 0, sizeof(*out));
     snprintf(path, sizeof(path), "/api/counterpart?yt=%s", video_id);
-    int len = api_get(path, g_buf, sizeof(g_buf));
+    int len = api_get(path, g_cp_buf, sizeof(g_cp_buf));
     if (len < 0)
         return len;
-    if (has_server_error())
+    char err[8];
+    if (tsv_value(g_cp_buf, "error", err, sizeof(err)))
         return API_ERR_SERVER;
-    for_each_line(g_buf, 6, cp_line, out);
+    for_each_line(g_cp_buf, 6, cp_line, out);
     return 0;
 }
