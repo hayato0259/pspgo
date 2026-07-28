@@ -117,10 +117,16 @@ static int art_thread(SceSize args, void *argp)
             }
         }
         if (got != ART_SIDE * ART_SIDE * 4) {
-            char path[128];
-            snprintf(path, sizeof(path), "/art?id=%s&s=%d", id, ART_SIDE);
-            got = http_get_bin(net_server_host(), net_server_port(), path,
-                               g_rx, sizeof(g_rx));
+            char base_path[128], path[256];
+            snprintf(base_path, sizeof(base_path), "/art?id=%s&s=%d",
+                     id, ART_SIDE);
+            if (net_build_path(path, sizeof(path), base_path) < 0)
+                path[0] = '\0';
+            if (!path[0])
+                got = -1;
+            else
+                got = http_get_bin(net_server_host(), net_server_port(), path,
+                                   g_rx, sizeof(g_rx));
         }
 
         lock();

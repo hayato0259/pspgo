@@ -137,8 +137,13 @@ static int decode_thread(SceSize args, void *argp)
             return 0;
         }
     } else {
-        char path[96];
-        snprintf(path, sizeof(path), "/stream?yt=%s", g_video_id);
+        char base_path[96], path[224];
+        snprintf(base_path, sizeof(base_path), "/stream?yt=%s", g_video_id);
+        if (net_build_path(path, sizeof(path), base_path) < 0) {
+            g_last_error = -1;
+            g_state = PLAYER_ERROR;
+            return 0;
+        }
         sock = http_open_stream(net_server_host(), net_server_port(), path);
         if (sock < 0) {
             g_last_error = sock;

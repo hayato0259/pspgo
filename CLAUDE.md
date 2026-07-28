@@ -93,4 +93,4 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
 
 - 音源は差し替え可能にする。常用は Navidrome (Subsonic API) を第一候補、
   YouTube Music 経路 (`/stream?yt=`) は実験用（規約違反側であることをレポート参照）
-- PSP への配信は LAN 内の平文 HTTP のみ。外部公開しない
+- 既定は LAN 内のみ。外部公開する場合は共有トークン認証を必須にする
