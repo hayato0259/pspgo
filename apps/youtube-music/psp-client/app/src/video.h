@@ -41,4 +41,10 @@ int video_decode(void *draw_buf);
 /* デコード済みのフレーム数 (実測フレームレートの表示用) */
 int video_frames(void);
 
+/*
+ * 直前に描いたフレームの表示時刻 (ミリ秒)。まだ描いていなければ -1。
+ * 音の再生位置と比べて、進みすぎていれば待つ (音を基準に合わせる)。
+ */
+int video_pts_ms(void);
+
 #endif

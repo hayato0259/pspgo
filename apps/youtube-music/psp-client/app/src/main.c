@@ -1557,7 +1557,36 @@ static void video_overlay(const ApiTrack *t, PlayerState st)
     if (st == PLAYER_BUFFERING)
         text(SCR_W - 120, SCR_H - 24, C_DIM, 0.55f, "バッファリング中...");
 
+    /* 再生し始めのあいだだけ通信量を出す。
+       外出先で気付かずに使い続けると通信量が大きいため */
+    if (video_frames() < 24 * 8)
+        text(SCR_W - 122, 17, C_DIM, 0.5f, "通信量 約200MB/時");
+
     draw_song_video_toggle(150, SCR_H - 22);
+}
+
+/*
+ * 音を基準に映像の歩調を合わせる。
+ *
+ * デコードは音より速く回せてしまうので、そのままだと映像だけ先に進む。
+ * 直前に描いたフレームの表示時刻が音の再生位置より先なら、その差だけ待つ。
+ * 遅れているときは待たずに次へ進めば自然に追いつく。
+ *
+ * 待っている間は入力を拾えないので上限を設ける。
+ */
+static void video_pace(void)
+{
+    if (player_state() != PLAYER_PLAYING)
+        return;               /* 音がまだ始まっていないなら基準が無い */
+    int vms = video_pts_ms();
+    if (vms < 0)
+        return;
+    int ahead = vms - player_elapsed_ms();
+    if (ahead <= 8)
+        return;
+    if (ahead > 120)
+        ahead = 120;
+    sceKernelDelayThread((unsigned int)ahead * 1000);
 }
 
 static Screen screen_player_tick(void)
@@ -1634,11 +1663,15 @@ static Screen screen_player_tick(void)
      * 直接書くので、後から消すと書いた絵ごと消える。
      */
     video_sync(t);
-    if (g_video_for[0] && video_decode(gfx_draw_buffer()) == 1) {
+    /* 一時停止中は映像を止めて通常の画面に戻す。
+       描かないフレームがあると、表と裏で違う絵が交互に出てちらつくため */
+    if (g_video_for[0] && st != PLAYER_PAUSED &&
+        video_decode(gfx_draw_buffer()) == 1) {
         gfx_frame_begin_keep();
         video_overlay(t, st);
         dl_status_line();
         gfx_frame_end();
+        video_pace();
         return SCR_PLAYER;
     }
 

@@ -55,6 +55,7 @@ static void *g_display_buf;                  /* デコード先のアドレス�
 static int g_mpeg_ready = 0;
 static SceInt32 g_init_flag = 0;
 static int g_au_retry = 0;
+static int g_pts_ms = -1;      /* 直前に描いたフレームの表示時刻 */
 static unsigned char g_header[PSMF_HEADER_SIZE] __attribute__((aligned(64)));
 
 static unsigned int rx_available(void)
@@ -240,6 +241,7 @@ int video_start(const char *video_id, int seconds)
     g_cmd_stop = 0;
     g_init_flag = 0;
     g_au_retry = 0;
+    g_pts_ms = -1;
     g_state = VIDEO_BUFFERING;
 
     g_thread = sceKernelCreateThread("video_rx", recv_thread, 0x14, 0x8000, 0, 0);
@@ -269,6 +271,7 @@ void video_stop(void)
 VideoState video_state(void) { return g_state; }
 int video_last_error(void)   { return g_last_error; }
 int video_frames(void)       { return g_frames; }
+int video_pts_ms(void)       { return g_pts_ms; }
 
 int video_decode(void *draw_buf)
 {
@@ -314,6 +317,15 @@ int video_decode(void *draw_buf)
         g_state = VIDEO_ERROR;
         return -1;
     }
+
+    /*
+     * このフレームの表示時刻を覚えておく。
+     * PSMF は最初の表示時刻を 90000 (90kHz で 1 秒) から始める決まりなので、
+     * そのぶんを引いて曲の先頭からの経過に直す。
+     */
+    g_pts_ms = (int)(((long long)g_au.iPts - 90000) / 90);
+    if (g_pts_ms < 0)
+        g_pts_ms = 0;
 
     g_frames++;
     g_state = VIDEO_PLAYING;

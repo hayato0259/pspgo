@@ -133,6 +133,11 @@ int player_elapsed_sec(void)
     return (int)((long long)g_frames * 1152 / 44100);
 }
 
+int player_elapsed_ms(void)
+{
+    return (int)((long long)g_frames * 1152 * 1000 / 44100);
+}
+
 static int fail(int sock, FILE *fp, int handle, int src_reserved, int code)
 {
     if (src_reserved)

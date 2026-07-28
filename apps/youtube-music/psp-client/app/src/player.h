@@ -26,6 +26,8 @@ void player_toggle_pause(void);
 
 PlayerState player_state(void);
 int player_elapsed_sec(void);
+/* 再生位置をミリ秒で返す。映像を音に合わせるときは秒では粗すぎるため */
+int player_elapsed_ms(void);
 int player_last_error(void);
 
 #endif
