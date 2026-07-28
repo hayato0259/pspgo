@@ -32,6 +32,7 @@
 #include "dl.h"
 #include "osk.h"
 #include "counterpart.h"
+#include "video.h"
 
 PSP_MODULE_INFO("ytmusic", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -196,9 +197,32 @@ static int g_radio_error_frames = 0;
  * 音声は別スレッドなので再生は途切れない。
  */
 static const ApiCounterpart *g_counterpart = NULL;  /* 取得済みなら中身、まだなら NULL */
-static int g_counterpart_msg_frames = 0;  /* 切り替えできない旨の表示時間 */
-static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 static int g_net_ok = 0;         /* サーバーと疎通できたか (オフライン起動の判定) */
+static int g_counterpart_msg_frames = 0;  /* 切り替えできない旨の表示時間 */
+static char g_video_for[24] = "";         /* 映像を受け取っている videoId */
+
+/* 動画版を再生しているときだけ映像も受け取る。
+   曲版に戻ったり別の画面へ移ったら止める (通信と Media Engine を無駄に使わない) */
+static void video_sync(const ApiTrack *t)
+{
+    int want = (t && g_counterpart && g_counterpart->current_is_video && g_net_ok);
+    if (want && strcmp(g_video_for, t->video_id) != 0) {
+        snprintf(g_video_for, sizeof(g_video_for), "%s", t->video_id);
+        video_start(t->video_id, t->duration_sec);
+    } else if (!want && g_video_for[0]) {
+        video_stop();
+        g_video_for[0] = '\0';
+    }
+}
+
+static void video_release(void)
+{
+    if (g_video_for[0]) {
+        video_stop();
+        g_video_for[0] = '\0';
+    }
+}
+static int g_welcome_sel = 0;    /* 0=ログイン 1=ログインせずに使う */
 static int g_off_sel = 0, g_off_scroll = 0;   /* オフライン画面のカーソル */
 
 #define MAX_LYRIC_LINES 200
@@ -1238,6 +1262,7 @@ static int counterpart_switch(void)
         return -1;
     g_tracks[g_playing_index] = g_counterpart->alt;
     g_counterpart = NULL;   /* 切り替え先の対応情報は取り直す */
+    video_release();        /* 映像も作り直す */
     start_track(g_playing_index);
     return 0;
 }
@@ -1502,6 +1527,39 @@ static int replace_queue_with_radio(void)
     return 0;
 }
 
+/*
+ * 映像の上に重ねる情報。画面を覆いすぎないよう上下の帯だけにする。
+ * 本家も動画再生中は情報を最小限にするので、同じ考え方に揃えた。
+ */
+static void video_overlay(const ApiTrack *t, PlayerState st)
+{
+    draw_rect(0, 0, SCR_W, 24, 0xB0000000);
+    draw_rect(0, SCR_H - 52, SCR_W, 52, 0xB0000000);
+
+    if (t) {
+        text_clipped(MARGIN, 17, SCR_W - MARGIN * 2, C_TEXT, 0.6f, t->title);
+
+        int elapsed = player_elapsed_sec();
+        char tm[32];
+        if (t->duration_sec > 0) {
+            snprintf(tm, sizeof(tm), "%d:%02d / %d:%02d",
+                     elapsed / 60, elapsed % 60,
+                     t->duration_sec / 60, t->duration_sec % 60);
+            int w = (SCR_W - 48) * elapsed / t->duration_sec;
+            if (w > SCR_W - 48) w = SCR_W - 48;
+            draw_rect(24, SCR_H - 40, SCR_W - 48, 3, C_LINE);
+            draw_rect(24, SCR_H - 40, w, 3, C_ACCENT);
+        } else {
+            snprintf(tm, sizeof(tm), "%d:%02d", elapsed / 60, elapsed % 60);
+        }
+        text(24, SCR_H - 24, C_DIM, 0.55f, tm);
+    }
+    if (st == PLAYER_BUFFERING)
+        text(SCR_W - 120, SCR_H - 24, C_DIM, 0.55f, "バッファリング中...");
+
+    draw_song_video_toggle(150, SCR_H - 22);
+}
+
 static Screen screen_player_tick(void)
 {
     PlayerState st = player_state();
@@ -1518,6 +1576,7 @@ static Screen screen_player_tick(void)
     }
     if (g_pressed & PSP_CTRL_CROSS) {
         snd_play(SND_CANCEL);
+        video_release();
         return SCR_PLAYLIST;
     }
     if (g_pressed & PSP_CTRL_TRIANGLE) {
@@ -1568,6 +1627,20 @@ static Screen screen_player_tick(void)
     }
 
     ApiTrack *t = (g_playing_index >= 0) ? &g_tracks[g_playing_index] : NULL;
+
+    /*
+     * 動画版を再生しているなら映像も流す。
+     * デコードは画面を消す前に行うこと。Media Engine がフレームバッファへ
+     * 直接書くので、後から消すと書いた絵ごと消える。
+     */
+    video_sync(t);
+    if (g_video_for[0] && video_decode(gfx_draw_buffer()) == 1) {
+        gfx_frame_begin_keep();
+        video_overlay(t, st);
+        dl_status_line();
+        gfx_frame_end();
+        return SCR_PLAYER;
+    }
 
     ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
     ui_frame_begin();

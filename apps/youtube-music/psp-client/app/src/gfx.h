@@ -18,7 +18,19 @@ void gfx_shutdown(void);
 
 /* 画面クリアまで行う。背景は ui_frame_begin() が重ねる */
 void gfx_frame_begin(void);
+/*
+ * 画面を消さずに描き始める。
+ * 映像をフレームバッファへ直接書いた後、その上に文字を重ねるときに使う
+ * (消してしまうと映像が消える)。
+ */
+void gfx_frame_begin_keep(void);
 void gfx_frame_end(void);
+
+/*
+ * これから描き込むバッファの先頭アドレス。
+ * Media Engine に映像の書き込み先として渡すために使う。
+ */
+void *gfx_draw_buffer(void);
 
 /*
  * intraFont は文字描画時に深度/アルファテストを有効化したまま戻さないため、

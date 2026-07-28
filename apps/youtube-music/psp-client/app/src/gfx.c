@@ -10,6 +10,7 @@
 #include <pspkernel.h>
 #include <pspdisplay.h>
 #include <pspgu.h>
+#include <pspge.h>
 #include <math.h>
 #include <string.h>
 #include <stdio.h>
@@ -206,6 +207,19 @@ void gfx_shutdown(void)
     sceGuTerm();
 }
 
+/*
+ * 表と裏のどちらへ描いているか。
+ * sceGuSwapBuffers のたびに入れ替わる。Media Engine に渡す
+ * 書き込み先を正確に知る必要があるので、推測せず自分で数える。
+ */
+static int g_draw_parity = 0;
+
+void *gfx_draw_buffer(void)
+{
+    unsigned int base = (unsigned int)sceGeEdramGetAddr();
+    return (void *)(base + (g_draw_parity ? 0x88000u : 0u));
+}
+
 void gfx_frame_begin(void)
 {
     gfx_frame++;
@@ -214,6 +228,16 @@ void gfx_frame_begin(void)
     sceGuClearColor(C_BG);
     sceGuClearDepth(0);
     sceGuClear(GU_COLOR_BUFFER_BIT | GU_DEPTH_BUFFER_BIT);
+}
+
+void gfx_frame_begin_keep(void)
+{
+    gfx_frame++;
+    sceGuStart(GU_DIRECT, g_gu_list);
+    gu_state_2d();
+    /* 色は消さない。深度だけ揃えておく (文字描画が深度テストを残すため) */
+    sceGuClearDepth(0);
+    sceGuClear(GU_DEPTH_BUFFER_BIT);
 }
 
 #ifdef SHOTDUMP
@@ -253,6 +277,7 @@ void gfx_frame_end(void)
     sceDisplayWaitVblankStart();
 #ifndef SHOTDUMP
     sceGuSwapBuffers();   /* ダンプ用ビルドは常に同じオフスクリーンへ描く */
+    g_draw_parity ^= 1;
 #endif
 }
 

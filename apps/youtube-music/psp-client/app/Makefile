@@ -1,5 +1,5 @@
 TARGET = ytmusic
-OBJS = src/main.o src/gfx.o src/ui.o src/net.o src/api.o src/player.o src/login.o src/tsv.o src/art.o src/snd.o src/store.o src/dl.o src/osk.o src/counterpart.o
+OBJS = src/main.o src/gfx.o src/ui.o src/net.o src/api.o src/player.o src/login.o src/tsv.o src/art.o src/snd.o src/store.o src/dl.o src/osk.o src/counterpart.o src/video.o
 
 # PPSSPP でホスト上のサーバーに繋ぐ場合は 127.0.0.1 のまま。
 # 実機では Mac の LAN IP に差し替える: make SERVER_HOST=192.168.x.x
@@ -33,7 +33,7 @@ ASFLAGS = $(CFLAGS)
 
 LIBDIR =
 LDFLAGS =
-LIBS = -lintrafont -lpspgu -lpspmp3 -lpspaudio -lpsputility -lpspnet_inet -lpspnet_resolver -lpspnet_apctl -lm
+LIBS = -lpspmpeg -lintrafont -lpspgu -lpspmp3 -lpspaudio -lpsputility -lpspnet_inet -lpspnet_resolver -lpspnet_apctl -lm
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = YouTube Music
