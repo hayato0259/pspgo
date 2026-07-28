@@ -1129,19 +1129,21 @@ def main():
     # どちらが欠けても症状は同じ「Requested format is not available」で、
     # **ログインしていても曲が取れず無音になる**。
     # エラーの文面から原因が分からないので、起動時に確かめて止める。
+    #
+    # **止めはしない。** 欠けていても取れる曲はあるので、
+    # 動いているサーバーを落とす方が損。目立つ形で出すだけにする。
     try:
         import yt_dlp_ejs  # noqa: F401
     except ImportError:
-        sys.exit(
-            "yt-dlp の依存が足りません。次を実行してください:\n"
-            "  .venv/bin/pip install -U 'yt-dlp[default]'"
-        )
-    if not js_runtime():
-        sys.exit(
-            "JavaScript の実行環境がありません。次のいずれかを入れてください:\n"
-            "  Debian/Raspberry Pi OS: sudo apt install -y quickjs\n"
-            "  macOS:                  brew install deno"
-        )
+        print("[server] 警告: yt-dlp-ejs がありません。多くの曲が取れません\n"
+              "         .venv/bin/pip install -U 'yt-dlp[default]'", file=sys.stderr)
+    runtime = js_runtime()
+    if runtime:
+        print(f"[server] JS 実行環境: {runtime}")
+    else:
+        print("[server] 警告: JavaScript の実行環境がありません。多くの曲が取れません\n"
+              "         Debian/Raspberry Pi OS: sudo apt install -y quickjs\n"
+              "         macOS:                  brew install deno", file=sys.stderr)
     print(f"[server] auth: {'browser.json' if is_authed() else 'なし (一般向けホーム)'}")
     # Cookie の有無で「Premium 限定の曲が再生できるか」が変わる。
     # 後から原因を追えるよう起動時に必ず出す
