@@ -19,8 +19,7 @@ fi
 SEND_AUTH=1
 [[ "${2:-}" == "--no-auth" ]] && SEND_AUTH=0
 
-APP_DIR="${0:A:h}"
-[[ -n "${APP_DIR:-}" && -d "$APP_DIR" ]] || APP_DIR="$(cd "$(dirname "$0")" && pwd)"
+APP_DIR="$(cd "$(dirname "$0")" && pwd)"
 SRC="$APP_DIR/server"
 DEST="pspgo-server"          # Pi のホームからの相対パス
 
