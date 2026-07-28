@@ -25,6 +25,26 @@ Cookie の持ち込みが必要で、後者はアカウント停止のリスク�
 **OS は Raspberry Pi OS Lite (64-bit) を選ぶ。**
 デスクトップ版は 1GB の Pi 3 ではメモリを食うだけで、このサーバーには不要。
 
+### モデル選び（Zero 系を使う場合）
+
+| モデル | CPU / RAM | このサーバーに使えるか |
+|---|---|---|
+| Pi 3 / 3B+ | 4コア Cortex-A53 1.2〜1.4GHz / 1GB | **推奨。** 余裕がある |
+| Pi Zero 2 W | 4コア Cortex-A53 1.0GHz / **512MB** | 使える見込み。CPU は Pi 3 とほぼ同じだがメモリが半分 |
+| Pi Zero / Zero W | 1コア **ARMv6** 1.0GHz / 512MB | **非推奨。** Zero 2 W の 1/5 の処理能力しかない |
+
+- **Zero 2 W で動かす場合の変更点**
+  - systemd ユニットの `MemoryMax=600M` を `350M` 程度に下げる（RAM 512MB のため）
+  - スワップを増やす: `sudo dphys-swapfile swapoff` →
+    `/etc/dphys-swapfile` の `CONF_SWAPSIZE=512` → `sudo dphys-swapfile setup && sudo dphys-swapfile swapon`
+  - 一括ダウンロードと再生を同時にやるとメモリが厳しい。片方ずつにする
+- **Zero / Zero W を避ける理由**: ARMv6 シングルコアで MP3 変換が実時間に追いつかない可能性が高く、
+  ffmpeg の ARMv6 向けビルドで `Illegal instruction` を踏む報告も多い。
+  Python の依存パッケージもソースからのビルドになりやすい
+- **消費電力の差は判断材料にならない**: 24時間稼働の電気代は概算で
+  Pi 3 が年 500 円程度、Zero W が年 200 円程度（31円/kWh 換算）。
+  年 300 円の差のために性能を捨てる意味はない
+
 ## セットアップ
 
 ### 1. OS と依存パッケージ
