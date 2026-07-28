@@ -33,6 +33,10 @@ EXCLUDES=(
     --exclude 'tests/__pycache__/'
     --exclude '.DS_Store'      # macOS が撒くメタデータを Linux 側へ持ち込まない
     --exclude '._*'
+    # 外部公開用の共有トークンは Pi 側で生成したものが正。
+    # Mac 側に無い状態で --delete すると Pi の token.txt が消え、
+    # 開いているポートが無認証に戻ってしまうため必ず除外する
+    --exclude 'auth/token.txt'
 )
 # 認証ファイルは Google のセッション情報を含む。送るかどうかを明示的に選ぶ
 if [[ $SEND_AUTH -eq 0 ]]; then
