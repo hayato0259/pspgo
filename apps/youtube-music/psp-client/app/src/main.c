@@ -287,7 +287,13 @@ static void video_sync(const ApiTrack *t)
 {
     /* 対応版の有無とは無関係に「いま再生しているのが動画か」で決める。
        ミュージックビデオそのものの曲は対応版を持たないため */
-    int want = (t && g_info && g_info->current_is_video && g_net_ok);
+    /*
+     * 音が鳴らせなくなったら映像も止める。
+     * 音無しの映像だけを流し続けても意味が無いうえ、
+     * 音を基準にした歩調合わせが効かなくなって早送りに見える。
+     */
+    int want = (t && g_info && g_info->current_is_video && g_net_ok &&
+                player_state() != PLAYER_ERROR);
     if (want && strcmp(g_video_for, t->video_id) != 0) {
         snprintf(g_video_for, sizeof(g_video_for), "%s", t->video_id);
         video_start(t->video_id, t->duration_sec, player_elapsed_sec());
@@ -356,8 +362,13 @@ static int display_elapsed_sec(void)
     return g_seek_pending ? g_seek_target : player_elapsed_sec();
 }
 
+/* 音を基準にできないときの歩調合わせの起点 (0 = まだ決めていない) */
+static unsigned int g_vpace_base_us = 0;
+static int g_vpace_base_ms = 0;
+
 static void video_release(void)
 {
+    g_vpace_base_us = 0;
     if (g_video_for[0]) {
         video_stop();
         g_video_for[0] = '\0';
@@ -2095,12 +2106,29 @@ static void video_overlay(const ApiTrack *t, PlayerState st)
  */
 static void video_pace(void)
 {
-    if (player_state() != PLAYER_PLAYING)
-        return;               /* 音がまだ始まっていないなら基準が無い */
     int vms = video_pts_ms();
     if (vms < 0)
         return;
-    int ahead = vms - player_elapsed_ms();
+
+    int ref;
+    if (player_state() == PLAYER_PLAYING) {
+        ref = player_elapsed_ms();
+        g_vpace_base_us = 0;      /* 音が基準に戻った */
+    } else {
+        /*
+         * 音がまだ始まっていない間 (読み込み中など)。
+         * 基準が無いまま描くと、届いたぶんを全速力で描いて早送りになる。
+         * 最初に描いたフレームの時刻を起点に、実時間で歩調を取る。
+         */
+        unsigned int now = (unsigned int)sceKernelGetSystemTimeLow();
+        if (g_vpace_base_us == 0) {
+            g_vpace_base_us = now;
+            g_vpace_base_ms = vms;
+        }
+        ref = g_vpace_base_ms + (int)((now - g_vpace_base_us) / 1000);
+    }
+
+    int ahead = vms - ref;
     if (ahead <= 8)
         return;
     if (ahead > 120)

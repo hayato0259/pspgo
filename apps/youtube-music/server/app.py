@@ -495,6 +495,11 @@ def video_procs(video_id: str, start_sec: int = 0):
             "pipe:1",
         ],
         stdin=ydl.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+        # 映像の変換は音声の変換よりずっと重い。同じ曲を音と映像で同時に
+        # 流すため、Raspberry Pi では映像側が CPU を占有して
+        # **音への供給が数十秒途切れ、先に音が落ちる**。
+        # 音を優先したいので、映像側だけ優先度を下げて回す。
+        preexec_fn=lambda: os.nice(10),
     )
     ydl.stdout.close()
     return ydl, ff

@@ -300,11 +300,17 @@ static int decode_body(SceSize args, void *argp)
              * (Raspberry Pi 4 のサーバーで実際に 0x807F00FD で落ちた)
              * 受信が続いている限りは待ち続け、本当に供給が止まった場合だけ
              * 諦めるよう、受信バイト数が増えていれば待ち時間をリセットする。
+             *
+             * さらに、ミュージックビデオは音と映像で 2 本の変換を同時に
+             * 走らせるため、非力なサーバーでは音への供給が数十秒途切れる。
+             * 「サーバーが曲を取得できなかった」場合は受信 0 バイトで
+             * 即座に判別できる (PLAYER_ERR_NO_DATA) ので、
+             * ここは途中で詰まった場合だけを見る。長めに待って構わない。
              */
             if (total_rx != last_rx) {
                 last_rx = total_rx;   /* まだ届いている = 前に進める見込みあり */
                 stall = 0;
-            } else if (++stall > 4000) { /* 約20秒、無音のまま何も届かない */
+            } else if (++stall > 12000) { /* 約60秒、無音のまま何も届かない */
                 return fail(sock, fp, handle, src_reserved, bytes);
             }
             sceKernelDelayThread(5 * 1000);
