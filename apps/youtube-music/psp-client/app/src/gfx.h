@@ -70,6 +70,7 @@ void gfx_logo(int x, int y, int size);                    /* YT Music ロゴ */
 void gfx_glow(float x, float y, float w, float h, int alpha);   /* 白い光彩 */
 void gfx_shadow(float x, float y, float w, float h, int alpha); /* 柔らかい落ち影 */
 void gfx_card_fill(float x, float y, float size, unsigned int color); /* 角丸ベタ塗り */
+void gfx_circle_fill(float x, float y, float size, unsigned int color); /* 円のベタ塗り */
 /*
  * Material Symbols のアイコン。本家と同じ絵柄を使うため焼き込んである
  * (tools/make_icons.py が生成)。color で色を指定する。

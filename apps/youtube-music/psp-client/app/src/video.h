@@ -47,4 +47,10 @@ int video_frames(void);
  */
 int video_pts_ms(void);
 
+/*
+ * 画質を切り替える。次に video_start() したものから効く。
+ * 解像度は変えずビットレートだけ落とす (PSP 側は 480x272 固定のため)。
+ */
+void video_set_low_quality(int low);
+
 #endif

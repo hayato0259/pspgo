@@ -41,6 +41,7 @@ ICONS = [
     "lyrics", "more_vert", "search", "download",
     "radio", "bedtime", "repeat", "repeat_one", "shuffle",
     "music_video", "library_music", "wifi_off",
+    "bookmark", "bookmark!", "settings", "smart_display",
 ]
 
 

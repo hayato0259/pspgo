@@ -41,6 +41,7 @@ static char g_dump_req[32] = "";
 static unsigned int g_logo[LOGO_SIDE * LOGO_SIDE] __attribute__((aligned(16)));
 static unsigned int g_glow[GLOW_SIDE * GLOW_SIDE] __attribute__((aligned(16)));
 static unsigned int g_card[CARD_TEX_SIDE * CARD_TEX_SIDE] __attribute__((aligned(16)));
+static unsigned int g_circle[CARD_TEX_SIDE * CARD_TEX_SIDE] __attribute__((aligned(16)));
 
 static float clamp01(float v)
 {
@@ -117,9 +118,23 @@ static void make_ui_textures(void)
         }
     }
 
+    /*
+     * 円。再生画面のボタンの下地に使う (本家のボタンは丸い)。
+     * 角丸ベタ塗りと同じ距離関数で、丸みを半径いっぱいにしたもの。
+     */
+    for (int y = 0; y < CARD_TEX_SIDE; y++) {
+        for (int x = 0; x < CARD_TEX_SIDE; x++) {
+            float dx = x - 31.5f, dy = y - 31.5f;
+            float a = clamp01(0.5f + (31.5f - sqrtf(dx * dx + dy * dy)));
+            g_circle[y * CARD_TEX_SIDE + x] =
+                ((unsigned)(a * 255.0f) << 24) | 0x00FFFFFF;
+        }
+    }
+
     sceKernelDcacheWritebackRange(g_logo, sizeof(g_logo));
     sceKernelDcacheWritebackRange(g_glow, sizeof(g_glow));
     sceKernelDcacheWritebackRange(g_card, sizeof(g_card));
+    sceKernelDcacheWritebackRange(g_circle, sizeof(g_circle));
 }
 
 /* --- GU ----------------------------------------------------------------- */
@@ -417,6 +432,11 @@ static void make_icon_textures(void)
     for (int i = 0; i < ICON_COUNT; i++)
         for (int p = 0; p < ICON_SIDE * ICON_SIDE; p++)
             g_icon_tex[i][p] = ((unsigned int)icon_alpha[i][p] << 24) | 0x00FFFFFF;
+}
+
+void gfx_circle_fill(float x, float y, float size, unsigned int color)
+{
+    blit_tex(g_circle, CARD_TEX_SIDE, x, y, size, size, color);
 }
 
 void gfx_icon(IconId id, float x, float y, float size, unsigned int color)

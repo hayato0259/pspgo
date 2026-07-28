@@ -29,6 +29,15 @@ endif
 ifdef DEMO_ARTIST
 CFLAGS += -DDEMO_ARTIST=$(DEMO_ARTIST)
 endif
+# 操作パネル / シートを出した状態で起動する (エミュレータへ入力を送れないため)
+#   make DEMO_PANEL=1        パネルを開いた状態
+#   make DEMO_SHEET=1        「表示」のシート (2 で「設定」)
+ifdef DEMO_PANEL
+CFLAGS += -DDEMO_PANEL
+endif
+ifdef DEMO_SHEET
+CFLAGS += -DDEMO_SHEET=$(DEMO_SHEET)
+endif
 # 開発時の目視確認用: 画面ごとにフレームバッファを raw で書き出す
 ifdef UIDEBUG
 CFLAGS += -DUIDEBUG

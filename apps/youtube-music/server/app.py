@@ -11,13 +11,14 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
   GET /api/playlist?id=<id>  内容:      meta\t<題> / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
   GET /api/radio?yt=<videoId> ラジオ:   meta\tラジオ / track\t<videoId>\t<題>\t<アーティスト>\t<秒>
   GET /api/lyrics?yt=<videoId> 歌詞:    line\t<歌詞1行> / none\t1
-  GET /api/trackinfo?yt=<videoId> 再生中の曲: cur\tsong|video / like\t… / alt\t…
+  GET /api/trackinfo?yt=<videoId> 再生中の曲: cur\tsong|video / like\t… / meta\t… / lib\t… / alt\t…
   GET /api/rate?yt=<videoId>&r=like|dislike|none  高評価・低評価
+  GET /api/library?yt=<videoId>&s=0|1  ライブラリへの保存 / 解除
   GET /api/login/start       ログイン開始: code\t<入力コード> / url\t<URL> / interval\t<秒>
   GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
   GET /api/logout            トークン破棄
   GET /stream?yt=<videoId>&t=<秒>  音声を MP3 CBR 128kbps で配信 (t = 頭出し位置)
-  GET /video?yt=<videoId>&sec=<長さ>&t=<秒>  映像を PSMF (H.264 Baseline 480x272) で配信
+  GET /video?yt=<videoId>&sec=<長さ>&t=<秒>&low=0|1  映像を PSMF (H.264 Baseline 480x272) で配信
   GET /stream?file=<path>    ローカルファイルを変換して配信 (検証用)
 
 ログイン: Google 公式の OAuth デバイスコードフロー (テレビ・ゲーム機と同じ方式) を使う。
@@ -402,6 +403,7 @@ VIDEO_W = 480          # PSP の画面
 VIDEO_H = 272
 VIDEO_FPS = 24         # 30 だと Media Engine が間に合わない可能性があるため控えめに
 VIDEO_BITRATE = 400_000
+VIDEO_BITRATE_LOW = 200_000   # 「画質: 低」。解像度は変えずビットレートだけ落とす
 PSMF_HEADER_SIZE = 2048
 PACK_SIZE = 2048
 PTS_HZ = 90000
@@ -452,14 +454,20 @@ def ytdlp_cmd(*args: str) -> list:
     return cmd + list(args)
 
 
-def video_procs(video_id: str, start_sec: int = 0):
+def video_procs(video_id: str, start_sec: int = 0, low: int = 0):
     """yt-dlp → ffmpeg をつないで MPEG プログラムストリームを吐かせる。
+
+    low=1 は「画質: 低」。**解像度とフレーム数は変えない。**
+    PSP 側は 480x272 固定で受け取る作りで、PSMF の見出しにも書き込むため、
+    ここを変えるとクライアントの前提が崩れる。回線が細いときに
+    途切れにくくするのが目的なので、ビットレートだけを落とす。
 
     映像と音声が 1 本にまとまった 360p の形式 (itag 18) を優先する。
     映像だけの形式は分割配信で、標準出力へ流し込む取り方だと
     403 で弾かれるため使えない (音声側で m4a を優先しているのと同じ理由)。
     音声はここでは捨てる。元が 640x360 でも 480x272 に縮めるので画質に影響はない。
     """
+    bitrate = VIDEO_BITRATE_LOW if low else VIDEO_BITRATE
     url = video_id
     if not url.startswith("http"):
         url = f"https://music.youtube.com/watch?v={video_id}"
@@ -486,9 +494,9 @@ def video_procs(video_id: str, start_sec: int = 0):
             "-r", str(VIDEO_FPS),
             "-g", str(VIDEO_FPS),          # 1 秒ごとに I フレーム
             "-bf", "0",                    # Baseline は B フレームを持てない
-            "-b:v", str(VIDEO_BITRATE),
-            "-maxrate", str(VIDEO_BITRATE),
-            "-bufsize", str(VIDEO_BITRATE),
+            "-b:v", str(bitrate),
+            "-maxrate", str(bitrate),
+            "-bufsize", str(bitrate),
             "-preload", "1000000",         # 最初の表示時刻を 90000 に合わせる
             "-f", "vob", "-packetsize", str(PACK_SIZE),
             "pipe:1",
@@ -656,11 +664,32 @@ def video_kind(video_type: str) -> str:
     return "song" if (video_type or "").endswith("ATV") else "video"
 
 
+def views_text(count: int) -> str:
+    """再生回数を本家と同じ書き方にする (1771回視聴 / 165万回視聴 / 2.4億回視聴)。
+
+    10 以上の単位は小数を出さない (本家が「998万回視聴」「26万回視聴」と書く)。
+    """
+    for base, unit in ((100000000, "億"), (10000, "万")):
+        if count >= base:
+            v = count / base
+            n = str(int(v)) if v >= 10 else f"{v:.1f}".rstrip("0").rstrip(".")
+            return f"{n}{unit}回視聴"
+    return f"{count}回視聴"
+
+
+# ライブラリへの保存に使うトークン。曲の情報を取ったときに控えておく
+# (トークンは get_watch_playlist の応答にしか含まれないため)
+_lib_tokens: dict = {}
+_lib_lock = threading.Lock()
+
+
 def tsv_trackinfo(video_id: str) -> str:
     """再生中の曲について、一度の問い合わせで分かることをまとめて返す。
 
       cur\t<song|video>            いま再生しているのが曲版か動画か
       like\t<like|dislike|none>    評価の状態
+      meta\t<アルバム名>\t<再生回数>  再生画面の 2 行目に出す情報
+      lib\t<0|1>                   ライブラリに保存済みか
       alt\t<id>\t<種別>\t<題>\t<アーティスト>\t<秒>   対応する別バージョン (あれば)
 
     「曲 / 動画」の切り替えは、同じ楽曲の別バージョンが別の動画として
@@ -689,6 +718,26 @@ def tsv_trackinfo(video_id: str) -> str:
         f"like\t{like}",
     ]
 
+    album = (current.get("album") or {}).get("name") or ""
+    # 再生回数は get_watch_playlist に含まれないので別に取る。
+    # 取れなくても曲は再生できるので、失敗しても黙って空にする
+    views = ""
+    try:
+        details = get_yt().get_song(video_id).get("videoDetails") or {}
+        if details.get("viewCount"):
+            views = views_text(int(details["viewCount"]))
+    except Exception as e:
+        print(f"[server] 再生回数を取れません ({video_id}): {e!r}", file=sys.stderr)
+    lines.append(f"meta\t{clean(album)}\t{views}")
+
+    tokens = current.get("feedbackTokens") or {}
+    if tokens.get("add") and tokens.get("remove"):
+        with _lib_lock:
+            if len(_lib_tokens) > 256:
+                _lib_tokens.clear()
+            _lib_tokens[video_id] = tokens
+        lines.append(f"lib\t{1 if current.get('inLibrary') else 0}")
+
     other = current.get("counterpart")
     if other and other.get("videoId"):
         dur = other.get("duration_seconds") or parse_len(
@@ -712,6 +761,29 @@ def tsv_rate(video_id: str, rating: str) -> str:
         return "error\t評価にはログインが必要です\n"
     get_yt().rate_song(video_id, value)
     return f"like\t{rating}\n"
+
+
+def tsv_library(video_id: str, want: int) -> str:
+    """曲をライブラリに保存する / 保存を外す (本家プレイヤーの「保存」)。
+
+    必要なトークンは get_watch_playlist の応答にしか含まれない。
+    tsv_trackinfo が控えたものを使い、無ければその場で取り直す
+    (再生画面を開けば必ず trackinfo を通るので、通常は控えたものが使える)。
+    """
+    if not is_authed():
+        return "error\t保存にはログインが必要です\n"
+
+    with _lib_lock:
+        tokens = _lib_tokens.get(video_id)
+    if not tokens:
+        tsv_trackinfo(video_id)
+        with _lib_lock:
+            tokens = _lib_tokens.get(video_id)
+    if not tokens:
+        return "error\tこの曲はライブラリに保存できません\n"
+
+    get_yt().edit_song_library_status(tokens["add"] if want else tokens["remove"])
+    return f"lib\t{1 if want else 0}\n"
 
 
 def tsv_lyrics(video_id: str) -> str:
@@ -907,6 +979,9 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/rate" and "yt" in q and "r" in q:
                 self._text(tsv_rate(q["yt"][0], q["r"][0]))
                 return
+            if url.path == "/api/library" and "yt" in q:
+                self._text(tsv_library(q["yt"][0], query_int(q, "s")))
+                return
         except Exception as e:
             # 保存済みトークンが失効・無効化されていると Google が 401 を返す。
             # 生のエラーを出す代わりに再ログインを促す (トークンは消さない)。
@@ -960,7 +1035,8 @@ class Handler(BaseHTTPRequestHandler):
                 seconds = int(q.get("sec", ["0"])[0] or 0)
             except ValueError:
                 seconds = 0
-            ydl, ff = video_procs(q["yt"][0], query_int(q, "t"))
+            ydl, ff = video_procs(q["yt"][0], query_int(q, "t"),
+                                  query_int(q, "low"))
             self._stream_psmf([ydl, ff], ff, seconds, source=ydl)
             return
 

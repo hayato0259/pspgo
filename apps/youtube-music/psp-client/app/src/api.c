@@ -284,6 +284,12 @@ static int cp_line(char **f, int nf, void *vctx)
     } else if (strcmp(f[0], "like") == 0 && nf >= 2) {
         out->rating = (strcmp(f[1], "like") == 0)    ? RATE_LIKE :
                       (strcmp(f[1], "dislike") == 0) ? RATE_DISLIKE : RATE_NONE;
+    } else if (strcmp(f[0], "meta") == 0 && nf >= 3) {
+        copy_field(out->album, sizeof(out->album), f[1]);
+        copy_field(out->views, sizeof(out->views), f[2]);
+    } else if (strcmp(f[0], "lib") == 0 && nf >= 2) {
+        out->can_save = 1;
+        out->in_library = (atoi(f[1]) != 0);
     } else if (strcmp(f[0], "alt") == 0 && nf >= 6) {
         out->has_alt = 1;
         copy_field(out->alt.video_id, sizeof(out->alt.video_id), f[1]);
@@ -328,6 +334,21 @@ int api_rate(const char *video_id, ApiRating rating)
     const char *r = (rating == RATE_LIKE)    ? "like" :
                     (rating == RATE_DISLIKE) ? "dislike" : "none";
     snprintf(path, sizeof(path), "/api/rate?yt=%s&r=%s", video_id, r);
+    int len = api_get(path, g_cp_buf, sizeof(g_cp_buf));
+    if (len < 0)
+        return len;
+    char err[8];
+    if (tsv_value(g_cp_buf, "error", err, sizeof(err)))
+        return API_ERR_SERVER;
+    return 0;
+}
+
+int api_library(const char *video_id, int save)
+{
+    char path[160];
+    if (!video_id)
+        return -1;
+    snprintf(path, sizeof(path), "/api/library?yt=%s&s=%d", video_id, save ? 1 : 0);
     int len = api_get(path, g_cp_buf, sizeof(g_cp_buf));
     if (len < 0)
         return len;

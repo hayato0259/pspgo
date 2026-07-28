@@ -81,6 +81,12 @@ void trackinfo_set_rating(const char *video_id, ApiRating rating)
         g_done.rating = rating;
 }
 
+void trackinfo_set_library(const char *video_id, int in_library)
+{
+    if (video_id && g_done_ready && strcmp(g_done_for, video_id) == 0)
+        g_done.in_library = in_library;
+}
+
 const ApiTrackInfo *trackinfo_result(const char *video_id)
 {
     if (!video_id || !g_done_ready)

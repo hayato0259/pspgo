@@ -98,6 +98,12 @@ static SceInt32 ringbuffer_cb(ScePVoid pData, SceInt32 iNumPackets, ScePVoid pPa
     return (SceInt32)(want / PACK_SIZE);
 }
 
+/* 画質。1 で細い回線向けにビットレートを落としたものを受け取る。
+   解像度とフレーム数は変わらない (PSP 側が 480x272 固定のため) */
+static int g_low = 0;
+
+void video_set_low_quality(int low) { g_low = low ? 1 : 0; }
+
 /* --- 受信スレッド ------------------------------------------------------- */
 
 static int recv_thread(SceSize args, void *argp)
@@ -106,8 +112,8 @@ static int recv_thread(SceSize args, void *argp)
     g_thread_running = 1;
 
     char base_path[128], path[256];
-    snprintf(base_path, sizeof(base_path), "/video?yt=%s&sec=%d&t=%d",
-             g_video_id, g_seconds, g_start_sec);
+    snprintf(base_path, sizeof(base_path), "/video?yt=%s&sec=%d&t=%d&low=%d",
+             g_video_id, g_seconds, g_start_sec, g_low);
     if (net_build_path(path, sizeof(path), base_path) < 0) {
         g_last_error = -1;
         g_state = VIDEO_ERROR;

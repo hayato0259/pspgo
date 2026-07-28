@@ -33,4 +33,7 @@ const ApiTrackInfo *trackinfo_result(const char *video_id);
  */
 void trackinfo_set_rating(const char *video_id, ApiRating rating);
 
+/* 保存の結果を手元の記憶に反映する (取り直しを待たずに絵を変えるため) */
+void trackinfo_set_library(const char *video_id, int in_library);
+
 #endif

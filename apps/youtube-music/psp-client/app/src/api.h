@@ -63,6 +63,10 @@ typedef enum {
 typedef struct {
     int current_is_video;   /* いま再生しているのが動画か */
     ApiRating rating;       /* 高評価・低評価の状態 */
+    char album[96];         /* アルバム名 (無ければ空) */
+    char views[32];         /* 再生回数 ("165万回視聴")。取れなければ空 */
+    int can_save;           /* ライブラリに保存できる曲か */
+    int in_library;         /* 保存済みか */
     int has_alt;            /* 0 = 切り替え先が無い (トグルを出さない) */
     int alt_is_video;       /* 切り替え先が動画か */
     ApiTrack alt;           /* 切り替え先 */
@@ -73,6 +77,9 @@ int api_trackinfo(const char *video_id, ApiTrackInfo *out);
 
 /* /api/rate?yt=&r=。評価を付ける。戻り値: 0=成功 / <0 エラー */
 int api_rate(const char *video_id, ApiRating rating);
+
+/* /api/library?yt=&s=。ライブラリに保存 (save=1) / 解除 (0)。0=成功 / <0 エラー */
+int api_library(const char *video_id, int save);
 
 /* 直近の API 呼び出しがサーバーから返したエラー文。無ければ空文字列。
    サーバーが error 行を返した場合、上記の関数は負値を返す。 */

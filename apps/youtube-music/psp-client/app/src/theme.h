@@ -54,4 +54,21 @@
 #define PLAY_TEXT_W   360  /* 文字の幅の上限。超えたぶんは横に流す */
 #define PLAY_NOTE_Y   250  /* 読み込み中・エラーなどの一時的な行 */
 
+/* --- 再生画面の操作パネル (十字キーの上下で出す) ---
+ * 出すとアートワークが上に詰まり、題名とアーティストは画面の一番上へ移る。
+ * 下から順に シークバー → ボタン → キュー。
+ */
+#define PANEL_TITLE_Y  30   /* 題名 (左揃え) */
+#define PANEL_SUB_Y    48   /* アーティスト・アルバム・再生回数 */
+#define PANEL_ART      88
+#define PANEL_ART_Y    58
+#define PANEL_TIME_Y   166  /* 経過 / 全体。本家と同じくバーの上に置く */
+#define PANEL_BAR_Y    174
+#define PANEL_BTN      22   /* ボタンの辺 */
+#define PANEL_BTN_Y    184  /* ボタンの上端 */
+#define PANEL_BTN_STEP 30   /* ボタンの間隔 */
+#define PANEL_Q_Y      216  /* キュー (次に流れる曲) */
+#define PANEL_Q        44
+#define PANEL_Q_STEP   52
+
 #endif
