@@ -4,7 +4,8 @@
  * 画面遷移: 接続 → ログイン選択 → ログイン(QR) → ホーム → プレイリスト → 再生
  *           ホーム/接続失敗 → オフライン ライブラリ (ダウンロード済みの曲)
  * 操作: 上下=移動 / ○=決定 / ×=戻る / △=一時停止 / L,R=前後の曲
- *       □=ダウンロード (オフライン画面では削除) / SELECT=検索 / START=終了
+ *       □=ダウンロード (オフライン画面では削除) / SELECT=検索
+ *       終了は HOME (本体のシステム画面が出る)
  *
  * ログインは OAuth デバイスコードフロー。Google との通信はサーバーが行い、
  * このアプリは QR コードと入力コードを表示して承認完了を待つだけ。
@@ -626,7 +627,7 @@ static Screen screen_connect_tick(void)
             text((SCR_W - gfx_text_width(0.62f, b)) / 2.0f, 212,
                  C_TEXT, 0.62f, b);
         }
-        text(SCR_W / 2.0f - 40, 230, C_DIM, 0.6f, "START: 終了");
+        text(SCR_W / 2.0f - 52, 230, C_DIM, 0.6f, "終了は HOME ボタン");
         gfx_frame_end();
         return SCR_CONNECT;
     }
@@ -2075,8 +2076,12 @@ int main(void)
     while (g_running) {
         g_demo_screen = (int)scr;
         input_update();
-        if (g_pressed & PSP_CTRL_START)
-            break;
+        /*
+         * START では終了しない。
+         * 本体の作法では終了は HOME ボタンで、システムの確認画面が出る
+         * (終了コールバックを登録済みなのでそのまま動く)。
+         * ゲーム以外のアプリで START が即終了なのは事故のもと。
+         */
 
         /* スリープタイマーはどの画面にいても満了させ、自動次曲送りも止める */
         if (sleep_timer_tick()) {

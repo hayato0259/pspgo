@@ -213,11 +213,13 @@ def art_pixels(item_id: str, size: int) -> bytes:
     img = img.resize((size, size), Image.LANCZOS)
 
     # 角丸 (PC 版 YouTube Music のカードと同じ見た目)。
-    # 角のアルファを 0 にして送ると、PSP 側はブレンドだけで角丸になる
+    # 角のアルファを 0 にして送ると、PSP 側はブレンドだけで角丸になる。
+    # id が "@" で始まるものはアカウントの画像なので円形にする (本家と同じ)。
     from PIL import ImageDraw
+    radius = (size // 2) if item_id.startswith("@") else max(3, size // 8)
     mask = Image.new("L", (size, size), 0)
     ImageDraw.Draw(mask).rounded_rectangle(
-        [0, 0, size - 1, size - 1], radius=max(3, size // 8), fill=255)
+        [0, 0, size - 1, size - 1], radius=radius, fill=255)
     img.putalpha(mask)
 
     data = img.tobytes()   # R,G,B,A の並び = PSP の GU_PSM_8888 と同じ
@@ -722,6 +724,11 @@ def tsv_status() -> str:
         try:
             info = get_yt().get_account_info()
             name = clean(info.get("accountName")) or "-"
+            # アカウントの画像も覚えておく。クライアントは "@me" で取りに来る
+            # (本家も右上はアイコンで、名前は出さない)
+            photo = info.get("accountPhotoUrl")
+            if photo:
+                remember_art("@me", [{"url": photo, "width": 108}])
         except Exception:
             pass
     return (

@@ -55,24 +55,31 @@ void ui_top_bar(int auth, const char *account)
     /* PC 版と同じく帯を敷かず、黒地に直接ロゴ + Music ロゴタイプ */
     gfx_logo(MARGIN, 4, 20);
     text_bold(MARGIN + 26, 19, C_TEXT, 0.82f, "Music");
-    if (auth && account[0] && account[0] != '-') {
-        float w = gfx_text_width(0.6f, account);
-        text(SCR_W - MARGIN - w, 19, C_DIM, 0.6f, account);
+    /* 右上は本家と同じくアカウントの画像。名前は出さない
+       (サーバーが "@me" として円形に切り出したものを配る) */
+    if (auth) {
+        (void)account;
+        art_draw("@me", SCR_W - MARGIN - 22, 4, 22);
     }
 }
 
 void ui_chrome(const char *title, const char *hint,
                int auth, const char *account)
 {
-    gfx_logo(8, 4, 16);
-    text_bold(30, 17, C_TEXT, 0.85f, title);
-    if (auth)
-        text(SCR_W - 8 - gfx_text_width(0.7f, account), 17,
-             C_DIM, 0.7f, account);
-    draw_rect(0, 24, SCR_W, 1, C_LINE);
-    draw_rect(0, SCR_H - 18, SCR_W, 18, 0xFF0A0A0A);
-    draw_rect(0, SCR_H - 18, SCR_W, 1, C_LINE);
-    text(8, SCR_H - 5, C_DIM, 0.65f, hint);
+    gfx_logo(10, 5, 18);
+    text_bold(34, 19, C_TEXT, 0.85f, title);
+    /* 右上は本家と同じくアカウントの画像。名前は出さない
+       (サーバーが "@me" として円形に切り出したものを配る) */
+    if (auth) {
+        (void)account;
+        art_draw("@me", SCR_W - 10 - 20, 4, 20);
+    }
+    draw_rect(0, 28, SCR_W, 1, C_LINE);
+    draw_rect(0, SCR_H - 20, SCR_W, 20, 0xFF0A0A0A);
+    draw_rect(0, SCR_H - 20, SCR_W, 1, C_LINE);
+    /* 操作の行は細いと読み取りづらい。本体のシステム表示に近い太さにする
+       (PGF に太字が無いので二度描きで太らせる) */
+    text_bold(10, SCR_H - 6, C_DIM, 0.68f, hint);
 }
 
 /* --- 選択中カードの情報パネル -------------------------------------------- */
