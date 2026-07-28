@@ -84,6 +84,13 @@ void text_clipped(float x, float y, int w, unsigned int color, float size,
                   const char *s);
 
 /*
+ * 幅 w の箱でクリップしたまま、中身を dx だけ左へずらして 1 行描く。
+ * 箱に収まらない題名を流す (マーキー) ために使う。dx=0 は text_clipped と同じ。
+ */
+void text_scroll(float x, float y, int w, float dx, unsigned int color,
+                 float size, const char *s, int bold);
+
+/*
  * サイズ size で描いたときの幅 (px)。
  * intraFontMeasureText は「直前に SetStyle したサイズ」で測るため、
  * 素で呼ぶと直前の描画に引きずられる。必ずこちらを使う。

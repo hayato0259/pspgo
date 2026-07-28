@@ -143,6 +143,32 @@ chmod 700 ~/pspgo/apps/youtube-music/server/auth
 chmod 600 ~/pspgo/apps/youtube-music/server/auth/*
 ```
 
+### 3-2. Premium 限定の曲を再生する（`auth/cookies.txt`）
+
+YouTube Music には **Music Premium 会員だけに配信される音源**があり、
+ログイン状態が無い yt-dlp では取れない。この状態で再生しようとすると
+PSP 側に「この曲を再生できませんでした」と出て、サーバーのログには
+`This video is only available to Music Premium members` が残る。
+
+`server/auth/cookies.txt`（Netscape 形式）を置くと yt-dlp に渡される。
+無ければ従来どおり匿名で取りに行く（＝Premium 限定の曲だけ再生できない）。
+
+**ytmusicapi の認証ファイル（`oauth.json` / `browser.json`）は流用できない。**
+あれは一覧の取得にしか使えず、yt-dlp とは別系統のため Cookie を別に用意する。
+
+作り方（**自分のブラウザで実行する。他人に渡さない**）:
+
+1. ブラウザで**シークレットウィンドウ**を開き、YouTube にログインする
+2. そのウィンドウのまま Cookie を Netscape 形式でエクスポートする
+3. **エクスポートしたらシークレットウィンドウをログアウトせずに閉じる**
+   （通常のウィンドウで取ると、その後の操作で Cookie が更新され、
+   書き出したファイルの方が無効になる）
+4. `server/auth/cookies.txt` として置き、`chmod 600` する
+
+Cookie は Google アカウントのセッションそのものなので、
+`auth/` ごと `.gitignore` 済み。コミット・共有をしない。
+起動時のログに `[server] yt-dlp cookies: auth/cookies.txt` と出れば読めている。
+
 ### 4. IP アドレスを固定する（重要）
 
 **PSP クライアントは DNS を引かず、`server.txt` に書いた IPv4 アドレスへ直接繋ぐ。**

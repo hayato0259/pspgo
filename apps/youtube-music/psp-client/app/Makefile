@@ -18,8 +18,16 @@ CFLAGS += -DAUTODEMO_NODL
 endif
 # 接続後すぐ指定の曲を再生画面で流す (再生画面の見た目を確認する用)
 #   make DEMO_TRACK='\"lYBUbBu4W08\"'
+# 題名・アーティストも差し替えられる (長い題名で横に流れる動きを見る)
+#   make DEMO_TRACK='\"...\"' DEMO_TITLE='\"とても長い題名\"'
 ifdef DEMO_TRACK
 CFLAGS += -DDEMO_TRACK=$(DEMO_TRACK)
+endif
+ifdef DEMO_TITLE
+CFLAGS += -DDEMO_TITLE=$(DEMO_TITLE)
+endif
+ifdef DEMO_ARTIST
+CFLAGS += -DDEMO_ARTIST=$(DEMO_ARTIST)
 endif
 # 開発時の目視確認用: 画面ごとにフレームバッファを raw で書き出す
 ifdef UIDEBUG

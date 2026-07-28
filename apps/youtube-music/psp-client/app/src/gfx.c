@@ -455,6 +455,17 @@ void text_clipped(float x, float y, int w, unsigned int color, float size,
     sceGuScissor(0, 0, SCR_W, SCR_H);
 }
 
+void text_scroll(float x, float y, int w, float dx, unsigned int color,
+                 float size, const char *s, int bold)
+{
+    sceGuScissor((int)x, (int)y - 18, w, 24);
+    if (bold)
+        text_bold(x - dx, y, color, size, s);
+    else
+        text(x - dx, y, color, size, s);
+    sceGuScissor(0, 0, SCR_W, SCR_H);
+}
+
 float gfx_text_width(float size, const char *s)
 {
     intraFontSetStyle(g_font, size, 0xFFFFFFFF, GFX_TEXT_SHADOW, 0.0f, 0);

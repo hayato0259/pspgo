@@ -372,6 +372,60 @@ void art_draw(const char *id, int x, int y, int size)
     art_draw_ex(id, (float)x, (float)y, (float)size, 0xFFFFFFFF);
 }
 
+/*
+ * ぼかした背景。再生画面の下地に使う。
+ *
+ * ぼかし処理は書かない。64x64 を 16x16 まで平均で縮めてから画面いっぱいに
+ * 引き伸ばすと、GU の線形補間が 30 倍に拡大する過程でそのままぼかしになる。
+ * 正方形のまま縦横比を保って「覆う」ので、左右は画面幅、上下ははみ出す。
+ *
+ * 角のアルファが 0 のままだと背景に穴が空くため、不透明度は 255 に固定する。
+ */
+#define BLUR_SIDE 16
+
+void art_draw_blur_bg(const char *id, unsigned int tint)
+{
+    static unsigned int g_blur[BLUR_SIDE * BLUR_SIDE] __attribute__((aligned(16)));
+    static char g_blur_id[48] = "";
+
+    if (!id || !id[0])
+        return;
+
+    lock();
+    Slot *s = find_slot(id);
+    if (s && s->state == SLOT_READY && strcmp(g_blur_id, id) != 0) {
+        const int step = ART_SIDE / BLUR_SIDE;
+        for (int by = 0; by < BLUR_SIDE; by++) {
+            for (int bx = 0; bx < BLUR_SIDE; bx++) {
+                unsigned int r = 0, g = 0, b = 0;
+                for (int y = 0; y < step; y++) {
+                    const unsigned int *row =
+                        &s->pixels[(by * step + y) * ART_SIDE + bx * step];
+                    for (int x = 0; x < step; x++) {
+                        unsigned int p = row[x];
+                        r += p & 0xFF;
+                        g += (p >> 8) & 0xFF;
+                        b += (p >> 16) & 0xFF;
+                    }
+                }
+                unsigned int n = (unsigned int)(step * step);
+                g_blur[by * BLUR_SIDE + bx] = 0xFF000000 |
+                    ((b / n) << 16) | ((g / n) << 8) | (r / n);
+            }
+        }
+        snprintf(g_blur_id, sizeof(g_blur_id), "%s", id);
+        sceKernelDcacheWritebackRange(g_blur, sizeof(g_blur));
+    }
+    unlock();
+
+    if (strcmp(g_blur_id, id) != 0)
+        return;   /* 画像がまだ来ていない (取得は art_draw 側が予約する) */
+
+    float side = (float)SCR_W;
+    gfx_blit_raw_ex(g_blur, BLUR_SIDE, 0.0f, ((float)SCR_H - side) / 2.0f,
+                    side, side, tint);
+}
+
 unsigned int art_avg_color(const char *id)
 {
     if (!id || !id[0])

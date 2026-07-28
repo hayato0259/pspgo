@@ -23,6 +23,13 @@ void art_draw_ex(const char *id, float x, float y, float size,
                  unsigned int tint);
 
 /*
+ * アートワークをぼかして画面いっぱいに敷く (再生画面の下地)。
+ * tint で暗さを決める (0xFF808080 で半分の明るさ)。
+ * まだ読み込めていない場合は何も描かない。
+ */
+void art_draw_blur_bg(const char *id, unsigned int tint);
+
+/*
  * 読み込み済みアートワークの平均色 (ABGR)。背景の環境光に使う。
  * まだ読み込めていない場合は 0 を返す。
  */

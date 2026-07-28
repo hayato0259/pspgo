@@ -436,19 +436,6 @@ static int sleep_timer_tick(void)
     return 0;
 }
 
-static void draw_sleep_timer(int x, int y)
-{
-    if (g_sleep_timer_option == 0)
-        return;
-
-    unsigned int seconds =
-        (unsigned int)((g_sleep_timer_remaining_us + 999999ULL) / 1000000ULL);
-    char timer[32];
-    snprintf(timer, sizeof(timer), "タイマー %u:%02u",
-             seconds / 60, seconds % 60);
-    text(x, y, C_DIM, 0.6f, timer);
-}
-
 static void scroll_to(int sel, int *scroll)
 {
     if (sel < *scroll)
@@ -675,11 +662,19 @@ static Screen screen_connect_tick(void)
      * 画面を手で辿らずに再生画面の見た目を確認するために使う
      * (エミュレータへの入力送信は本体の操作を奪うため使わない方針)。
      *   make DEMO_TRACK='\"<videoId>\"'
+     * 題名とアーティストは DEMO_TITLE / DEMO_ARTIST で差し替えられる
+     * (長い題名を入れると、横に流れる動きを確認できる)。
      */
+#ifndef DEMO_TITLE
+#define DEMO_TITLE "確認用の再生"
+#endif
+#ifndef DEMO_ARTIST
+#define DEMO_ARTIST ""
+#endif
     g_track_count = 1;
     snprintf(g_tracks[0].video_id, sizeof(g_tracks[0].video_id), "%s", DEMO_TRACK);
-    snprintf(g_tracks[0].title, sizeof(g_tracks[0].title), "%s", "確認用の再生");
-    g_tracks[0].artist[0] = '\0';
+    snprintf(g_tracks[0].title, sizeof(g_tracks[0].title), "%s", DEMO_TITLE);
+    snprintf(g_tracks[0].artist, sizeof(g_tracks[0].artist), "%s", DEMO_ARTIST);
     g_tracks[0].duration_sec = 0;
     start_track(0);
     return SCR_PLAYER;
@@ -1642,6 +1637,45 @@ static void draw_rating(float x, float y)
              x + 26.0f, y, 18.0f, disliked ? C_TEXT : C_DIM);
 }
 
+/*
+ * 再生画面の題名・アーティストを 1 行で描く。
+ *
+ * 収まるなら中央揃え。収まらないなら箱の中を流す (テレビ版と同じ)。
+ * 端で少し止めてから一定の速さで流し、反対の端でも止めて戻る。
+ */
+static void marquee_line(int baseline, unsigned int color, float size,
+                         const char *s, int bold, unsigned int frames)
+{
+    if (!s || !s[0])
+        return;
+
+    float w = gfx_text_width(size, s);
+    if (w <= PLAY_TEXT_W) {
+        float x = ((float)SCR_W - w) / 2.0f;
+        if (bold)
+            text_bold(x, baseline, color, size, s);
+        else
+            text(x, baseline, color, size, s);
+        return;
+    }
+
+    const float speed = 0.4f;       /* 1 フレームあたりの移動量 (px) */
+    const unsigned int hold = 90;   /* 端で止める時間 (約 1.5 秒) */
+    float over = w - PLAY_TEXT_W;
+    unsigned int run = (unsigned int)(over / speed) + 1;
+    unsigned int p = frames % (hold + run + hold + run);
+    float dx;
+    if (p < hold)                 dx = 0.0f;
+    else if (p < hold + run)      dx = (float)(p - hold) * speed;
+    else if (p < hold + run + hold) dx = over;
+    else                          dx = over - (float)(p - hold - run - hold) * speed;
+    if (dx < 0.0f)  dx = 0.0f;
+    if (dx > over)  dx = over;
+
+    text_scroll(((float)SCR_W - PLAY_TEXT_W) / 2.0f, baseline, PLAY_TEXT_W,
+                dx, color, size, s, bold);
+}
+
 /* 「その他」メニュー。画面下から出るシート状の見た目にする */
 static void draw_player_menu(void)
 {
@@ -1653,12 +1687,19 @@ static void draw_player_menu(void)
     draw_rect(0, top, SCR_W, h, 0xFF181818);
     draw_rect(0, top, SCR_W, 1, C_LINE);
 
+    /* 動いている間は残り時間を出す (画面に常駐させる代わりにここで見せる) */
     char timer[48];
     int minutes = g_sleep_timer_minutes[g_sleep_timer_option];
-    if (minutes > 0)
+    if (minutes > 0 && g_sleep_timer_remaining_us > 0) {
+        unsigned int sec = (unsigned int)
+            ((g_sleep_timer_remaining_us + 999999ULL) / 1000000ULL);
+        snprintf(timer, sizeof(timer), "スリープタイマー: 残り %u:%02u",
+                 sec / 60, sec % 60);
+    } else if (minutes > 0) {
         snprintf(timer, sizeof(timer), "スリープタイマー: %d分", minutes);
-    else
+    } else {
         snprintf(timer, sizeof(timer), "%s", "スリープタイマー: オフ");
+    }
 
     char mode[48];
     const char *ml = play_mode_label();
@@ -1864,92 +1905,72 @@ static Screen screen_player_tick(void)
         return SCR_PLAYER;
     }
 
-    ui_bg_ambient(t ? art_avg_color(t->video_id) : 0);
-    ui_frame_begin();
-    ui_chrome("再生中",
-              "○: 再生/一時停止  △: 曲/動画  □: 歌詞  ←→: シーク  L/R: 前後  ↑↓: 評価  SELECT: その他  ×: 一覧",
-              g_auth, g_account);
+    /*
+     * テレビ版と同じ中央 1 カラム。
+     * 背景はアートワークをぼかしたもの、その上に アートワーク → 題名 →
+     * アーティスト の順で縦に積む。シークバー・再生制御・評価・キューは
+     * ここには出さず、十字キーの上下で呼び出すパネルに入れる。
+     */
+    gfx_frame_begin();
+    if (t)
+        art_draw_blur_bg(t->video_id, 0xFF787878);
+    /* 文字が沈まないよう下へ行くほど暗くする */
+    draw_vgrad(0, 0, SCR_W, SCR_H, 0x30000000, 0xA8000000);
+
     if (t) {
-        /* 左に大きなアートワーク (柔らかい影のみ、枠なし)、右に曲情報 */
-        gfx_shadow(20, 48, 128, 128, 0x90);
-        art_draw(t->video_id, 20, 48, 128);
-
-        const int tx = 168;
-        intraFontSetStyle(gfx_font(), 0.88f, C_TEXT, GFX_TEXT_SHADOW, 0.0f, 0);
-        intraFontPrintColumn(gfx_font(), tx, 70, SCR_W - tx - 16, t->title);
-        intraFontSetStyle(gfx_font(), 0.62f, C_DIM, GFX_TEXT_SHADOW, 0.0f, 0);
-        intraFontPrintColumn(gfx_font(), tx, 104, SCR_W - tx - 16, t->artist);
-
-        draw_rating(SCR_W - 76, 96);
-
-        /* 再生中か一時停止かはアイコンで示す (本家のプレイヤーと同じ) */
-        if (st == PLAYER_PLAYING || st == PLAYER_PAUSED)
-            gfx_icon(st == PLAYER_PAUSED ? ICON_PLAY_ARROW : ICON_PAUSE,
-                     tx, 120, 18.0f, C_TEXT);
-        const char *st_label =
-            (st == PLAYER_BUFFERING) ? "バッファリング中..." :
-            (st == PLAYER_ERROR)     ? "エラー" : "";
-        text(st_label[0] ? tx : tx + 26, 132,
-             (st == PLAYER_ERROR) ? C_ACCENT : C_DIM, 0.62f, st_label);
-        const char *mode_label = play_mode_label();
-        if (mode_label[0]) {
-            float mode_x = tx;
-            if (st_label[0])
-                mode_x += gfx_text_width(0.62f, st_label) + 10.0f;
-            text(mode_x, 132, C_DIM, 0.6f, mode_label);
+        /* 曲が変わったら流し始めの位置に戻す */
+        static char mq_id[24] = "";
+        static unsigned int mq_frames = 0;
+        if (strcmp(mq_id, t->video_id) != 0) {
+            snprintf(mq_id, sizeof(mq_id), "%s", t->video_id);
+            mq_frames = 0;
+        } else {
+            mq_frames++;
         }
-        if (st == PLAYER_ERROR) {
-            char e[80];
-            if (player_last_error() == PLAYER_ERR_NO_DATA)
-                snprintf(e, sizeof(e), "%s", "この曲を取得できませんでした");
-            else
-                snprintf(e, sizeof(e), "code: 0x%08X", player_last_error());
-            text(tx, 152, C_DIM, 0.6f, e);
-        }
-        draw_sleep_timer(st == PLAYER_ERROR ? 370 : tx, 152);
+
+        const float ax = ((float)SCR_W - PLAY_ART) / 2.0f;
+        gfx_shadow(ax, PLAY_ART_Y, PLAY_ART, PLAY_ART, 0x90);
+        art_draw_ex(t->video_id, ax, PLAY_ART_Y, PLAY_ART, 0xFFFFFFFF);
+
+        marquee_line(PLAY_TITLE_Y, C_TEXT, 0.85f, t->title, 1, mq_frames);
+        marquee_line(PLAY_ARTIST_Y, C_DIM, 0.62f, t->artist, 0, mq_frames);
 
         /*
-         * 通知行。トグルと一時的なお知らせが同じ場所を取り合うため、
-         * 重ならないよう優先順位を付けて 1 つだけ描く。
+         * 一時的なお知らせ。1 行を取り合うので優先順位を付けて 1 つだけ描く。
+         * ここに何も出ないのが通常の状態。
          */
+        char note[96] = "";
+        unsigned int note_color = C_DIM;
         if (g_radio_error_frames > 0) {
-            text_clipped(tx, 180, SCR_W - tx - 16, C_ACCENT, 0.58f,
-                         "ラジオを取得できませんでした");
+            snprintf(note, sizeof(note), "%s", "ラジオを取得できませんでした");
+            note_color = C_ACCENT;
             g_radio_error_frames--;
+        } else if (g_rate_error_frames > 0) {
+            snprintf(note, sizeof(note), "%s", "評価を送信できませんでした");
+            note_color = C_ACCENT;
+            g_rate_error_frames--;
         } else if (g_info_msg_frames > 0) {
-            text_clipped(tx, 180, SCR_W - tx - 16, C_DIM, 0.58f,
-                         "この曲に対応する動画はありません");
+            snprintf(note, sizeof(note), "%s",
+                     "この曲に対応する動画はありません");
             g_info_msg_frames--;
-        } else {
-            draw_song_video_toggle(tx, 180);
+        } else if (st == PLAYER_BUFFERING) {
+            snprintf(note, sizeof(note), "%s", "読み込み中");
+        } else if (st == PLAYER_ERROR) {
+            note_color = C_ACCENT;
+            if (player_last_error() == PLAYER_ERR_NO_DATA)
+                snprintf(note, sizeof(note), "%s",
+                         "この曲を再生できませんでした");
+            else
+                snprintf(note, sizeof(note), "再生できませんでした (0x%08X)",
+                         player_last_error());
         }
-
-        /* 進捗バー (細いトラック + 赤 + 角丸のつまみ) */
-        int elapsed = display_elapsed_sec();
-        char tm[32];
-        if (t->duration_sec > 0) {
-            snprintf(tm, sizeof(tm), "%d:%02d / %d:%02d",
-                     elapsed / 60, elapsed % 60,
-                     t->duration_sec / 60, t->duration_sec % 60);
-            int w = (SCR_W - 48) * elapsed / t->duration_sec;
-            if (w > SCR_W - 48) w = SCR_W - 48;
-            draw_rect(24, 202, SCR_W - 48, 3, C_LINE);
-            draw_rect(24, 202, w, 3, C_ACCENT);
-            gfx_card_fill(24 + w - 4, 199, 9, 0xFFFFFFFF);   /* つまみ */
-        } else {
-            snprintf(tm, sizeof(tm), "%d:%02d", elapsed / 60, elapsed % 60);
-        }
-        text(24, 222, C_DIM, 0.65f, tm);
-
-        if (g_playing_index + 1 < g_track_count) {
-            char next[160];
-            snprintf(next, sizeof(next), "次の曲: %s",
-                     g_tracks[g_playing_index + 1].title);
-            text_clipped(24, 243, SCR_W - 48, C_DIM, 0.6f, next);
-        }
+        if (note[0])
+            text(((float)SCR_W - gfx_text_width(0.58f, note)) / 2.0f,
+                 PLAY_NOTE_Y, note_color, 0.58f, note);
     } else {
-        text(24, 120, C_DIM, 0.75f, "(再生していません)");
-        draw_sleep_timer(168, 152);
+        const char *msg = "再生していません";
+        text(((float)SCR_W - gfx_text_width(0.7f, msg)) / 2.0f, 140,
+             C_DIM, 0.7f, msg);
     }
     draw_player_menu();
     dl_status_line();

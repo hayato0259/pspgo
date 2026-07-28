@@ -61,6 +61,7 @@ CLIENT_FILE = AUTH_DIR / "oauth_client.json"   # client_id / client_secret (自�
 TOKEN_FILE = AUTH_DIR / "oauth.json"           # ログイン後に自動生成されるトークン
 BROWSER_FILE = AUTH_DIR / "browser.json"       # 旧方式 (ブラウザヘッダ) も引き続き使える
 ACCESS_TOKEN_FILE = AUTH_DIR / "token.txt"     # 外部公開用の共有トークン
+COOKIES_FILE = AUTH_DIR / "cookies.txt"        # Premium 限定の音源を取るための Cookie
 
 _yt = None
 _yt_lock = threading.Lock()
@@ -433,6 +434,24 @@ def psmf_header(stream_size: int, seconds: int) -> bytes:
     return bytes(h)
 
 
+def ytdlp_cmd(*args: str) -> list:
+    """yt-dlp のコマンドを組み立てる。
+
+    YouTube Music には Premium 会員だけに配信される音源があり、
+    ログイン状態が無いと "This video is only available to Music Premium members"
+    で取得できない (実際に「感謝。」/ RSP がこれで再生できなかった)。
+    auth/cookies.txt があれば渡す。無ければ従来どおり匿名で取る。
+
+    ytmusicapi の認証 (oauth.json / browser.json) は一覧の取得にしか使えず
+    yt-dlp とは別系統なので、Cookie はこの 1 本を別に置く必要がある。
+    作り方は docs/raspberry-pi-server.md を参照。
+    """
+    cmd = ["yt-dlp", "--no-warnings", "-o", "-"]
+    if COOKIES_FILE.exists():
+        cmd += ["--cookies", str(COOKIES_FILE)]
+    return cmd + list(args)
+
+
 def video_procs(video_id: str, start_sec: int = 0):
     """yt-dlp → ffmpeg をつないで MPEG プログラムストリームを吐かせる。
 
@@ -445,11 +464,10 @@ def video_procs(video_id: str, start_sec: int = 0):
     if not url.startswith("http"):
         url = f"https://music.youtube.com/watch?v={video_id}"
     ydl = subprocess.Popen(
-        [
-            "yt-dlp", "--no-warnings", "-o", "-",
+        ytdlp_cmd(
             "-f", "18/best[height<=480][ext=mp4][acodec!=none]/best[acodec!=none]",
             url,
-        ],
+        ),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
     ff = subprocess.Popen(
@@ -951,13 +969,12 @@ class Handler(BaseHTTPRequestHandler):
             if not target.startswith("http"):
                 target = f"https://music.youtube.com/watch?v={target}"
             ydl = subprocess.Popen(
-                [
-                    "yt-dlp", "--no-warnings", "-o", "-",
+                ytdlp_cmd(
                     # m4a (AAC) を優先する。Opus/WebM はパイプ経由で
                     # ffmpeg が扱えない場合があり、無音のまま 0 バイトになる
                     "-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio",
                     target,
-                ],
+                ),
                 stdout=subprocess.PIPE,
                 stderr=subprocess.PIPE,
             )
@@ -982,6 +999,10 @@ def main():
                 f"yt-dlp は .venv/bin/pip install -U yt-dlp でも可)"
             )
     print(f"[server] auth: {'browser.json' if is_authed() else 'なし (一般向けホーム)'}")
+    # Cookie の有無で「Premium 限定の曲が再生できるか」が変わる。
+    # 後から原因を追えるよう起動時に必ず出す
+    print(f"[server] yt-dlp cookies: "
+          f"{'auth/cookies.txt' if COOKIES_FILE.exists() else 'なし (Premium 限定の曲は再生できません)'}")
     server = ThreadingHTTPServer(("0.0.0.0", port), Handler)
     print(f"[server] listening on 0.0.0.0:{port}")
     server.serve_forever()
