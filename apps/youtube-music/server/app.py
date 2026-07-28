@@ -371,14 +371,23 @@ def ffmpeg_cmd(src: str) -> list:
     ]
 
 
+# ホームで返すセクション数と、1 セクションあたりの項目数の上限。
+# 本家のホームは 20 以上のセクションがあり、6 で切ると
+# 「おすすめのミュージック ビデオ」などが丸ごと落ちていた。
+# 一方で全部返すと PSP 側の配列と通信量に響くため、両方に上限を置く。
+HOME_SECTIONS = 20
+HOME_ITEMS_PER_SECTION = 12
+
+
 def tsv_home() -> str:
-    sections, fellback = with_fallback(lambda yt: yt.get_home(limit=6), "ホーム取得")
+    sections, fellback = with_fallback(
+        lambda yt: yt.get_home(limit=HOME_SECTIONS), "ホーム取得")
     lines = []
     if fellback:
         lines.append("section\t※ ログイン中ですが一般向けの内容を表示しています")
     for section in sections:
         lines.append(f"section\t{clean(section.get('title'))}")
-        for item in section.get("contents", []):
+        for item in section.get("contents", [])[:HOME_ITEMS_PER_SECTION]:
             title = clean(item.get("title"))
             # アートワークは、下で書き出すのと同じ id で覚える
             # (食い違うとクライアントが取りに来た id で見つからない)

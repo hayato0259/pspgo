@@ -1,7 +1,9 @@
 #ifndef API_H
 #define API_H
 
-#define API_MAX_ITEMS 96
+/* ホームの全行 (セクション見出し + 項目)。
+   サーバー側の上限 (20 セクション x 12 項目) が収まる大きさにする */
+#define API_MAX_ITEMS 288
 #define API_MAX_TRACKS 100
 
 /* ホーム画面の1行。kind: 'S'=セクション見出し 'P'=プレイリスト 'V'=単曲 */

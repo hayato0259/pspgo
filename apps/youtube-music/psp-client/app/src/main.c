@@ -144,7 +144,9 @@ static char g_search_query[192] = "";
  * セクション見出し + 横並びのカード (アートワーク)。
  * 左右でカード移動、上下でセクション移動。
  */
-#define MAX_SECTIONS 12
+/* ホームのセクション数。本家のホームは 20 以上あり、
+   ここで切るとミュージックビデオの段などが丸ごと出なくなる */
+#define MAX_SECTIONS 24
 typedef struct {
     char title[128];
     int first;      /* g_home_items 内の最初のカードの位置 */
