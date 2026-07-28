@@ -3,7 +3,8 @@
 
 /*
  * 接続先サーバーの実行時解決。
- * EBOOT と同じフォルダの server.txt (例: "192.168.0.5:8080") を読み、
+ * EBOOT と同じフォルダの server.txt
+ * (例: "192.168.0.5:8080" / "myhome.example.net:8080") を読み、
  * 無ければコンパイル時既定 (SERVER_HOST / SERVER_PORT) を使う。
  * ビルド済み EBOOT を配布しても、利用者が server.txt を書くだけで使える。
  */
