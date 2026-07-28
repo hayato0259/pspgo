@@ -23,7 +23,7 @@ ASFLAGS = $(CFLAGS)
 
 LIBDIR =
 LDFLAGS =
-LIBS = -lintrafont -lpspgu -lpspmp3 -lpspaudio -lpsputility -lpspnet_inet -lpspnet_apctl -lm
+LIBS = -lintrafont -lpspgu -lpspmp3 -lpspaudio -lpsputility -lpspnet_inet -lpspnet_resolver -lpspnet_apctl -lm
 
 EXTRA_TARGETS = EBOOT.PBP
 PSP_EBOOT_TITLE = YouTube Music
