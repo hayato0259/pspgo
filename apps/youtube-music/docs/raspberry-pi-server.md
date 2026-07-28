@@ -1,7 +1,7 @@
 # Raspberry Pi にサーバーを移す（Mac を開かなくてよくする）
 
 配信サーバーを Raspberry Pi に載せ替えるための手順。
-**Raspberry Pi 3 でも性能は足りる**（後述の実測手順で確認できる）。
+**想定は Raspberry Pi 4**（Pi 3 でも足りる。後述の実測手順で確認できる）。
 
 これで Mac を起動しておく必要がなくなり、家にいる間はいつでも PSP から聴ける。
 
@@ -13,37 +13,37 @@ Cookie の持ち込みが必要で、後者はアカウント停止のリスク�
 **住宅回線に置くのが最も確実**という理由で自宅を選んでいる。
 （自前ライブラリ配信の Navidrome など、YouTube を経由しない音源なら VPS でも問題ない）
 
-## Pi 3 の性能見積もり
+## 必要な性能とモデルごとの適性
 
-| 項目 | 必要量 | Pi 3 (Cortex-A53 4コア 1.2GHz / RAM 1GB) |
+このサーバーの負荷は小さい。必要なのは次の 4 つだけ。
+
+| 項目 | 必要量 |
+|---|---|
+| MP3 変換 | 実時間の 1 倍（libmp3lame は軽い） |
+| 同時に走る ffmpeg | 最大 2 本（再生 1 本 + 一括ダウンロード 1 本。クライアントは 1 曲ずつ落とす） |
+| ネットワーク | 毎秒 16KB（128kbps） |
+| メモリ | Python + yt-dlp で 200〜400MB |
+
+| モデル | CPU / RAM | 適性 |
 |---|---|---|
-| MP3 変換 | 実時間の 1 倍 | libmp3lame は軽い。1 本なら 1 コアで足りる |
-| 同時に走る ffmpeg | 最大 2 本 | 再生 1 本 + 一括ダウンロード 1 本（クライアントは 1 曲ずつ落とす） |
-| ネットワーク | 毎秒 16KB（128kbps） | 有線 100Mbps・無線 802.11n のどちらでも余裕 |
-| メモリ | Python + yt-dlp で 200〜400MB | 1GB で収まる。デスクトップ無しの OS を選ぶこと |
+| **Pi 4** | 4コア Cortex-A72 1.5〜1.8GHz / 1〜8GB | **推奨。** 変換に十分な余裕があり、有線が本物のギガビット、無線も 5GHz 対応 |
+| Pi 3 / 3B+ | 4コア Cortex-A53 1.2〜1.4GHz / 1GB | 足りる |
+| Pi Zero 2 W | 4コア Cortex-A53 1.0GHz / 512MB | 使える見込み。メモリが半分なので `MemoryMax=350M` + スワップ 512MB に調整 |
+| Pi Zero / Zero W | 1コア **ARMv6** 1.0GHz / 512MB | **非推奨。** 変換が実時間に追いつかない可能性が高く、ffmpeg の ARMv6 ビルドで `Illegal instruction` を踏む報告も多い |
 
-**OS は Raspberry Pi OS Lite (64-bit) を選ぶ。**
-デスクトップ版は 1GB の Pi 3 ではメモリを食うだけで、このサーバーには不要。
+**OS は Raspberry Pi OS Lite (64-bit) を選ぶ。** デスクトップ版はこのサーバーには不要。
 
-### モデル選び（Zero 系を使う場合）
+### Pi 4 固有の注意
 
-| モデル | CPU / RAM | このサーバーに使えるか |
-|---|---|---|
-| Pi 3 / 3B+ | 4コア Cortex-A53 1.2〜1.4GHz / 1GB | **推奨。** 余裕がある |
-| Pi Zero 2 W | 4コア Cortex-A53 1.0GHz / **512MB** | 使える見込み。CPU は Pi 3 とほぼ同じだがメモリが半分 |
-| Pi Zero / Zero W | 1コア **ARMv6** 1.0GHz / 512MB | **非推奨。** Zero 2 W の 1/5 の処理能力しかない |
-
-- **Zero 2 W で動かす場合の変更点**
-  - systemd ユニットの `MemoryMax=600M` を `350M` 程度に下げる（RAM 512MB のため）
-  - スワップを増やす: `sudo dphys-swapfile swapoff` →
-    `/etc/dphys-swapfile` の `CONF_SWAPSIZE=512` → `sudo dphys-swapfile setup && sudo dphys-swapfile swapon`
-  - 一括ダウンロードと再生を同時にやるとメモリが厳しい。片方ずつにする
-- **Zero / Zero W を避ける理由**: ARMv6 シングルコアで MP3 変換が実時間に追いつかない可能性が高く、
-  ffmpeg の ARMv6 向けビルドで `Illegal instruction` を踏む報告も多い。
-  Python の依存パッケージもソースからのビルドになりやすい
-- **消費電力の差は判断材料にならない**: 24時間稼働の電気代は概算で
-  Pi 3 が年 500 円程度、Zero W が年 200 円程度（31円/kWh 換算）。
-  年 300 円の差のために性能を捨てる意味はない
+- **電源は 5V/3A の USB-C を使う**（公式アダプタが確実）。容量不足だと電圧低下で
+  自動的にクロックが下がり、変換が遅くなる。`vcgencmd get_throttled` が `0x0` 以外なら疑う
+- **発熱対策をする。** Pi 3 より熱くなるのでヒートシンクは実質必須、ケースに入れるならファンも。
+  85℃ でクロックが下がる（`vcgencmd measure_temp` で確認）
+- **メモリ 2GB 以上なら systemd の上限を緩める。** [../server/ytmusic-server.service](../server/ytmusic-server.service)
+  の `MemoryMax=600M` は Pi 3 (1GB) 想定なので、`1G` 程度にしてよい
+- **microSD より USB SSD 起動が安定する**（Pi 4 は USB からブートできる）。
+  24時間稼働で microSD が壊れるのを避けたい場合の選択肢
+- 有線 LAN が使えるならそちらを選ぶ（Pi 3 と違い USB 経由ではない本物のギガビット）
 
 ## セットアップ
 
