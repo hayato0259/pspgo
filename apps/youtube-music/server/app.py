@@ -464,14 +464,17 @@ def cookies_copy() -> str:
     return path
 
 
-def ytdlp_cmd(*args: str) -> list:
+def ytdlp_cmd(*args: str, cookies: bool = False) -> list:
     """yt-dlp のコマンドを組み立てる。
+
+    **Cookie は頼まれたときだけ付ける。** Cookie を渡すと yt-dlp は
+    ログイン必須の経路に入り、JS チャレンジを解くぶん取得の開始が
+    数秒 → 十数秒に伸びる (Raspberry Pi 4 の実測)。
+    普段は匿名で速く取り、匿名で取れなかった曲だけ Cookie で取り直す。
 
     YouTube Music には Premium 会員だけに配信される音源があり、
     ログイン状態が無いと "This video is only available to Music Premium members"
     で取得できない (実際に「感謝。」/ RSP がこれで再生できなかった)。
-    auth/cookies.txt があれば渡す。無ければ従来どおり匿名で取る。
-
     ytmusicapi の認証 (oauth.json / browser.json) は一覧の取得にしか使えず
     yt-dlp とは別系統なので、Cookie はこの 1 本を別に置く必要がある。
     作り方は docs/raspberry-pi-server.md を参照。
@@ -480,13 +483,14 @@ def ytdlp_cmd(*args: str) -> list:
     runtime = js_runtime()
     if runtime:
         cmd += ["--js-runtimes", runtime]
-    jar = cookies_copy()
-    if jar:
-        cmd += ["--cookies", jar]
+    if cookies:
+        jar = cookies_copy()
+        if jar:
+            cmd += ["--cookies", jar]
     return cmd + list(args)
 
 
-def video_procs(video_id: str, start_sec: int = 0):
+def video_procs(video_id: str, start_sec: int = 0, cookies: bool = False):
     """yt-dlp → ffmpeg をつないで MPEG プログラムストリームを吐かせる。
 
     映像と音声が 1 本にまとまった 360p の形式 (itag 18) を優先する。
@@ -501,6 +505,7 @@ def video_procs(video_id: str, start_sec: int = 0):
         ytdlp_cmd(
             "-f", "18/best[height<=480][ext=mp4][acodec!=none]/best[acodec!=none]",
             url,
+            cookies=cookies,
         ),
         stdout=subprocess.PIPE, stderr=subprocess.PIPE,
     )
@@ -880,16 +885,26 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write(f"[server] {message}\n")
         sys.stderr.flush()
 
-    def _stream_psmf(self, procs, tail, seconds, source=None):
+    def _stream_psmf(self, procs, tail, seconds, source=None, retry=None):
         """PSMF ヘッダを先に送り、続けて MPEG プログラムストリームを流す。
 
         配信しながらなので本体の長さは分からない。再生時間とビットレートから
         見積もった値をヘッダに書く (PSP 側はデータが尽きた時点で終わるので、
         多少ずれても再生には影響しない)。
+
+        音声と同じく、最初のパックが届くまで応答を始めない。
+        匿名で取れない映像は retry (Cookie 付き) にその場で切り替える。
         """
         seconds = seconds if seconds > 0 else 300
         estimate = seconds * VIDEO_BITRATE // 8
         estimate = ((estimate + PACK_SIZE - 1) // PACK_SIZE) * PACK_SIZE
+
+        buf = read_exact(tail.stdout, PACK_SIZE * 8)
+        if not buf and retry is not None:
+            self._log_failure(procs, source,
+                              "匿名では取得できず、Cookie で取り直します")
+            procs, tail, source = retry()
+            buf = read_exact(tail.stdout, PACK_SIZE * 8)
 
         self.send_response(200)
         self.send_header("Content-Type", "application/octet-stream")
@@ -897,16 +912,14 @@ class Handler(BaseHTTPRequestHandler):
         sent = 0
         try:
             self.wfile.write(psmf_header(estimate, seconds))
-            while True:
+            while buf:
                 # パック単位で読む。開始コードがパックをまたぐことは無いので、
                 # 境界を揃えておけば書き換えが安全にできる
-                buf = read_exact(tail.stdout, PACK_SIZE * 8)
-                if not buf:
-                    break
                 block = bytearray(buf)
                 retag_video_stream(block)
                 self.wfile.write(block)
                 sent += len(block)
+                buf = read_exact(tail.stdout, PACK_SIZE * 8)
         except (BrokenPipeError, ConnectionResetError):
             self.log_message("client disconnected after %d bytes", sent)
         finally:
@@ -914,13 +927,8 @@ class Handler(BaseHTTPRequestHandler):
                 if p.poll() is None:
                     p.terminate()
             self.log_message("video done: %d bytes", sent)
-            if sent == 0 and source is not None and source.stderr is not None:
-                try:
-                    err = source.stderr.read(4000).decode("utf-8", "replace").strip()
-                except Exception:
-                    err = ""
-                self.log_message("映像を取得できませんでした: %s",
-                                 err or "(理由の出力なし)")
+            if sent == 0:
+                self._log_failure([], source, "映像を取得できませんでした")
 
     @staticmethod
     def _protected_path(path: str) -> bool:
@@ -943,18 +951,42 @@ class Handler(BaseHTTPRequestHandler):
         self.end_headers()
         self.wfile.write(data)
 
-    def _stream_process(self, procs, tail, source=None):
+    def _log_failure(self, procs, source, what):
+        """空振りした変換の後始末をして、理由をログに残す。"""
+        err = ""
+        if source is not None and source.stderr is not None:
+            try:
+                err = source.stderr.read(4000).decode("utf-8", "replace").strip()
+            except Exception:
+                pass
+        for p in procs:
+            if p.poll() is None:
+                p.terminate()
+        self.log_message("%s: %s", what, err or "(理由の出力なし)")
+
+    def _stream_process(self, procs, tail, source=None, retry=None):
+        """MP3 を流す。最初の塊が届くまで応答を始めない。
+
+        匿名では取れない曲 (Premium 限定) は 1 バイトも出てこない。
+        その場合 retry (Cookie 付きで作り直した変換) にその場で切り替える。
+        クライアントには 1 回の応答にしか見えない。
+        """
+        buf = tail.stdout.read(CHUNK)
+        if not buf and retry is not None:
+            self._log_failure(procs, source,
+                              "匿名では取得できず、Cookie で取り直します")
+            procs, tail, source = retry()
+            buf = tail.stdout.read(CHUNK)
+
         self.send_response(200)
         self.send_header("Content-Type", "audio/mpeg")
         self.end_headers()
         sent = 0
         try:
-            while True:
-                buf = tail.stdout.read(CHUNK)
-                if not buf:
-                    break
+            while buf:
                 self.wfile.write(buf)
                 sent += len(buf)
+                buf = tail.stdout.read(CHUNK)
         except (BrokenPipeError, ConnectionResetError):
             self.log_message("client disconnected after %d bytes", sent)
         finally:
@@ -964,13 +996,8 @@ class Handler(BaseHTTPRequestHandler):
             self.log_message("stream done: %d bytes", sent)
             # 1 バイトも流れなかったときは、取得側の理由をログに残す。
             # これが無いと「200 を返したのに無音」で原因が追えない。
-            if sent == 0 and source is not None and source.stderr is not None:
-                try:
-                    err = source.stderr.read(4000).decode("utf-8", "replace").strip()
-                except Exception:
-                    err = ""
-                self.log_message("音声を取得できませんでした: %s",
-                                 err or "(理由の出力なし)")
+            if sent == 0:
+                self._log_failure([], source, "音声を取得できませんでした")
 
     def do_GET(self):
         url = urllib.parse.urlparse(self.path)
@@ -1066,30 +1093,44 @@ class Handler(BaseHTTPRequestHandler):
                 seconds = int(q.get("sec", ["0"])[0] or 0)
             except ValueError:
                 seconds = 0
-            ydl, ff = video_procs(q["yt"][0], query_int(q, "t"))
-            self._stream_psmf([ydl, ff], ff, seconds, source=ydl)
+            def make_video(cookies=False):
+                ydl, ff = video_procs(q["yt"][0], query_int(q, "t"),
+                                      cookies=cookies)
+                return [ydl, ff], ff, ydl
+
+            procs, tail, src = make_video()
+            retry = (lambda: make_video(cookies=True)) \
+                if COOKIES_FILE.exists() else None
+            self._stream_psmf(procs, tail, seconds, source=src, retry=retry)
             return
 
         if url.path == "/stream" and "yt" in q:
             target = q["yt"][0]
             if not target.startswith("http"):
                 target = f"https://music.youtube.com/watch?v={target}"
-            ydl = subprocess.Popen(
-                ytdlp_cmd(
-                    # m4a (AAC) を優先する。Opus/WebM はパイプ経由で
-                    # ffmpeg が扱えない場合があり、無音のまま 0 バイトになる
-                    "-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio",
-                    target,
-                ),
-                stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE,
-            )
-            ff = subprocess.Popen(
-                ffmpeg_cmd("pipe:0", query_int(q, "t")),
-                stdin=ydl.stdout, stdout=subprocess.PIPE
-            )
-            ydl.stdout.close()
-            self._stream_process([ydl, ff], ff, source=ydl)
+            def make_audio(cookies=False):
+                ydl = subprocess.Popen(
+                    ytdlp_cmd(
+                        # m4a (AAC) を優先する。Opus/WebM はパイプ経由で
+                        # ffmpeg が扱えない場合があり、無音のまま 0 バイトになる
+                        "-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio",
+                        target,
+                        cookies=cookies,
+                    ),
+                    stdout=subprocess.PIPE,
+                    stderr=subprocess.PIPE,
+                )
+                ff = subprocess.Popen(
+                    ffmpeg_cmd("pipe:0", query_int(q, "t")),
+                    stdin=ydl.stdout, stdout=subprocess.PIPE
+                )
+                ydl.stdout.close()
+                return [ydl, ff], ff, ydl
+
+            procs, tail, src = make_audio()
+            retry = (lambda: make_audio(cookies=True)) \
+                if COOKIES_FILE.exists() else None
+            self._stream_process(procs, tail, source=src, retry=retry)
             return
 
         self._text("error\tnot found\n", code=404)
@@ -1099,36 +1140,45 @@ _js_runtime = False   # False = 未判定 (None は「無い」)
 
 
 def js_runtime() -> str:
-    """yt-dlp に渡す JavaScript 実行環境の名前。無ければ None。
+    """yt-dlp の --js-runtimes に渡す指定。無ければ None。
 
     yt-dlp は YouTube の JS チャレンジを外部のランタイムに解かせる。
     対応は deno / bun / quickjs (実行ファイル名は qjs) / node で、
     **node だけは 22 以上**が要る (Debian が配る node 20 では足りない)。
-    Debian は quickjs を配っているので Raspberry Pi ではそれが最も手軽。
+
+    **deno を最優先する。** JIT を持たない quickjs は Raspberry Pi 4 だと
+    1 回の取得に CPU を 30 秒占有し、実測で deno の 2 倍以上かかった
+    (積み重なって Pi 全体が止まった)。deno は apt に無いので、
+    sudo 無しで置ける ~/.deno/bin も探し、PATH に無ければパス付きで返す。
 
     **見つけたものは名前で明示的に渡す必要がある。**
-    yt-dlp が既定で使うのは deno だけで、入っているだけでは使われない
-    (`--js-runtimes` で指定する)。
+    yt-dlp が既定で使うのは deno だけで、入っているだけでは使われない。
     """
     global _js_runtime
     if _js_runtime is not False:
         return _js_runtime
 
     _js_runtime = None
-    for exe, name in (("deno", "deno"), ("bun", "bun"), ("qjs", "quickjs")):
+    if shutil.which("deno"):
+        _js_runtime = "deno"
+        return _js_runtime
+    for cand in (Path.home() / ".deno/bin/deno", Path("/usr/local/bin/deno")):
+        if cand.exists():
+            _js_runtime = f"deno:{cand}"
+            return _js_runtime
+    for exe, name in (("bun", "bun"), ("qjs", "quickjs")):
         if shutil.which(exe):
             _js_runtime = name
-            break
-    else:
-        node = shutil.which("node")
-        if node:
-            try:
-                out = subprocess.run([node, "--version"], capture_output=True,
-                                     text=True, timeout=10).stdout.strip()
-                if int(out.lstrip("v").split(".")[0]) >= 22:
-                    _js_runtime = "node"
-            except Exception:
-                pass
+            return _js_runtime
+    node = shutil.which("node")
+    if node:
+        try:
+            out = subprocess.run([node, "--version"], capture_output=True,
+                                 text=True, timeout=10).stdout.strip()
+            if int(out.lstrip("v").split(".")[0]) >= 22:
+                _js_runtime = "node"
+        except Exception:
+            pass
     return _js_runtime
 
 

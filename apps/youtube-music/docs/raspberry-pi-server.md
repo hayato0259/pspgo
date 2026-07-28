@@ -141,16 +141,28 @@ sudo apt install -y git python3-venv ffmpeg quickjs
 `yt-dlp` は **apt で入れないこと。** Debian のパッケージは古く、YouTube 側の変更で
 すぐ壊れる。後述の venv に pip で入れて、定期的に更新する。
 
-**`quickjs` は必須。** yt-dlp は YouTube の JS チャレンジを外部の
-JavaScript 実行環境に解かせる。無いと**ログインしていても再生用の形式が消え**、
+**JavaScript 実行環境が必須**（Cookie で取るときに使う）。yt-dlp は
+YouTube の JS チャレンジを外部のランタイムに解かせる。無いと
+**ログインしていても再生用の形式が消え**、
 `Requested format is not available` で曲が取れない。
-対応するのは deno / bun / quickjs / node で、**node だけは 22 以上**が要る。
-Debian が配る node は 20 なので足りない。**Debian で確実なのは quickjs**
-（`qjs` コマンドを入れてくれる）。
 
-**入れるだけでは使われない。** yt-dlp が既定で使うのは deno だけで、
-他は `--js-runtimes` で名前を渡さないと「unavailable」のままになる。
-サーバーは入っているものを自分で探して渡すので、apt で入れるだけでよい。
+**本命は deno。** apt に無いので公式バイナリを置く（sudo 不要）:
+
+```bash
+mkdir -p ~/.deno/bin
+curl -sL -o /tmp/deno.zip \
+  "https://github.com/denoland/deno/releases/latest/download/deno-$(uname -m)-unknown-linux-gnu.zip"
+unzip -o /tmp/deno.zip -d ~/.deno/bin && chmod +x ~/.deno/bin/deno && rm /tmp/deno.zip
+```
+
+- apt で入る quickjs は **JIT が無く、Pi 4 では 1 回の取得に CPU を 30 秒使う**
+  （実測。deno は 14 秒）。曲送りで積み重なると Pi 全体が止まる。
+  実際に「何も再生できなくなった」事故を起こしたので、quickjs は保険に留める
+- node は 22 以上が要る（Debian が配る node 20 では足りない）
+- **入れるだけでは使われない。** yt-dlp が既定で使うのは deno だけで、
+  他は `--js-runtimes` で名前を渡さないと「unavailable」のまま。
+  サーバーは deno → bun → quickjs → node の順に自分で探して渡す
+  （PATH に無い `~/.deno/bin/deno` も見つける）
 
 ### 2. リポジトリとサーバー
 
@@ -186,8 +198,15 @@ YouTube Music には **Music Premium 会員だけに配信される音源**が�
 PSP 側に「この曲を再生できませんでした」と出て、サーバーのログには
 `This video is only available to Music Premium members` が残る。
 
-`server/auth/cookies.txt`（Netscape 形式）を置くと yt-dlp に渡される。
+`server/auth/cookies.txt`（Netscape 形式）を置くと使われる。
 無ければ従来どおり匿名で取りに行く（＝Premium 限定の曲だけ再生できない）。
+
+**Cookie があっても、まず匿名で取りに行く。** Cookie 経由はログイン必須の
+経路に入り、JS チャレンジを解くぶん開始が数秒 → 十数秒に伸びるため
+（Pi 4 実測: 匿名 2.8 秒 / Cookie 14 秒）、
+**匿名で取れなかった曲だけ** Cookie で取り直す。
+つまり普通の曲の速さは Cookie を置いても変わらず、
+Premium 限定の曲だけ再生開始までしばらく待つ。
 
 **ytmusicapi の認証ファイル（`oauth.json` / `browser.json`）は流用できない。**
 あれは一覧の取得にしか使えず、yt-dlp とは別系統のため Cookie を別に用意する。
@@ -378,10 +397,15 @@ cd ~/pspgo/apps/youtube-music/server
      **必ず `yt-dlp[default]` で入れる**（requirements.txt と週次更新の
      両方をそう直してある）
   2. **JavaScript の実行環境**: Mac には deno があったので気付かなかったが、
-     Raspberry Pi には何も入っていなかった。`sudo apt install -y quickjs`。
+     Raspberry Pi には何も入っていなかった。
      さらに **deno 以外は `--js-runtimes` で明示しないと使われない**
      （入れただけでは `quickjs (unavailable)` のまま）。
      サーバーが自分で探して渡すようにしてある
+- **quickjs で Pi が止まった。** JIT が無いため JS チャレンジ 1 回に
+  CPU を 30 秒使い、曲送りのたびに積み重なって何も再生できなくなった
+  （yt-dlp 8 本 / ffmpeg 7 本が滞留、負荷 5.0）。deno に替えて解消。
+  あわせて「Cookie があっても、まず匿名で取る」構成にした
+  （上の 3-2 を参照。普通の曲は JS チャレンジ自体を通らない）
   サーバーは起動時にこの 2 つを確認し、足りなければ入れ方を出して止まる
 - **電源不足の警告が出た** (`vcgencmd get_throttled` が `0x50005`)。
   Pi 4 は 5V/3A が必要。`0x0` 以外なら電源かケーブルを疑う

@@ -23,8 +23,9 @@ MISSING=()
 command -v ffmpeg >/dev/null || MISSING+=(ffmpeg)
 command -v curl   >/dev/null || MISSING+=(curl)
 # yt-dlp は YouTube の JS チャレンジを外部のランタイムに解かせる。
-# 無いと「Requested format is not available」で曲が取れない。
-# Debian が配る node は 20 で yt-dlp の要求 (22 以上) に届かないため quickjs を使う
+# 無いと「Requested format is not available」で曲が取れない (Cookie 使用時)。
+# quickjs は apt で入るが Pi では 1 回 30 秒かかり実用にならないため、
+# 保険として入れつつ、本命の deno を後で別に入れる
 command -v qjs    >/dev/null || MISSING+=(quickjs)
 python3 -c 'import venv, ensurepip' 2>/dev/null || MISSING+=(python3-venv)
 if (( ${#MISSING[@]} )); then
@@ -42,6 +43,21 @@ echo "==> venv"
 "$SERVER_DIR/.venv/bin/pip" install -q -r "$SERVER_DIR/requirements.txt"
 echo "    yt-dlp $("$SERVER_DIR/.venv/bin/yt-dlp" --version)"
 echo "    quickjs $(qjs --help 2>&1 | head -1 | awk '{print $3}')"
+
+# --- deno (JS チャレンジの本命。apt に無いので公式バイナリを置く) ----------
+# quickjs は JIT が無く Pi 4 で 1 回の取得に CPU を 30 秒使う (実測)。
+# deno なら同じ処理が半分以下で済む。sudo 不要の ~/.deno/bin に置けば
+# サーバーが自分で見つけて yt-dlp に渡す (app.py の js_runtime)
+if ! command -v deno >/dev/null && [[ ! -x "$HOME/.deno/bin/deno" ]]; then
+    echo "==> deno を導入 (~/.deno/bin)"
+    mkdir -p "$HOME/.deno/bin"
+    curl -sL -o /tmp/deno.zip \
+      "https://github.com/denoland/deno/releases/latest/download/deno-$(uname -m)-unknown-linux-gnu.zip"
+    unzip -o -q /tmp/deno.zip -d "$HOME/.deno/bin"
+    chmod +x "$HOME/.deno/bin/deno"
+    rm -f /tmp/deno.zip
+fi
+echo "    deno $("$HOME/.deno/bin/deno" --version 2>/dev/null | head -1 || deno --version | head -1)"
 echo "    ffmpeg $(ffmpeg -version | head -1 | cut -d' ' -f3)"
 
 # --- 認証ファイル -----------------------------------------------------------
