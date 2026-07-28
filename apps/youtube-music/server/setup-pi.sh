@@ -22,6 +22,10 @@ echo "==> 環境: $(uname -m) / user=$SERVICE_USER / dir=$SERVER_DIR"
 MISSING=()
 command -v ffmpeg >/dev/null || MISSING+=(ffmpeg)
 command -v curl   >/dev/null || MISSING+=(curl)
+# yt-dlp は YouTube の JS チャレンジを外部のランタイムに解かせる。
+# 無いと「Requested format is not available」で曲が取れない。
+# Debian が配る node は 20 で yt-dlp の要求 (22 以上) に届かないため quickjs を使う
+command -v qjs    >/dev/null || MISSING+=(quickjs)
 python3 -c 'import venv, ensurepip' 2>/dev/null || MISSING+=(python3-venv)
 if (( ${#MISSING[@]} )); then
     echo "==> apt で導入: ${MISSING[*]}"
@@ -37,6 +41,7 @@ echo "==> venv"
 "$SERVER_DIR/.venv/bin/pip" install -q --upgrade pip
 "$SERVER_DIR/.venv/bin/pip" install -q -r "$SERVER_DIR/requirements.txt"
 echo "    yt-dlp $("$SERVER_DIR/.venv/bin/yt-dlp" --version)"
+echo "    quickjs $(qjs --help 2>&1 | head -1 | awk '{print $3}')"
 echo "    ffmpeg $(ffmpeg -version | head -1 | cut -d' ' -f3)"
 
 # --- 認証ファイル -----------------------------------------------------------

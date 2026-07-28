@@ -86,6 +86,31 @@ cd apps/youtube-music
   ```
 - `MemoryMax` は Pi の搭載メモリから自動で決まる（1GB機なら 600M、4GB機なら 1500M）
 
+### 外出先から Pi を操作する（Tailscale）
+
+自宅の LAN の外にいると SSH は届かない。Pi と手元の端末を同じ
+Tailscale のネットワークに入れておくと、**どこからでも同じホスト名で
+SSH と `deploy-pi.sh` が通る**。IP アドレスの固定もポート開放も要らない。
+
+```bash
+# Pi と手元の端末の両方で
+tailscale up
+tailscale status        # 割り当てられたホスト名を確認する
+```
+
+以後は Tailscale のホスト名（`<マシン名>.<tailnet 名>.ts.net`）を
+そのまま `deploy-pi.sh` と `scp` に渡せる。
+
+```bash
+PSPGO_SSH_KEY=~/.ssh/<鍵> ./deploy-pi.sh <user>@<マシン名>.<tailnet 名>.ts.net --code-only
+```
+
+- **自分の tailnet 名は自宅を特定できる情報なので、このリポジトリには書かない**
+  （公開リポジトリのため）。実際のホスト名は非公開側で管理する
+- **PSP 側は Tailscale に入れない。** PSP は DNS を引かず IPv4 直打ちなので、
+  `server.txt` には従来どおり LAN の IP または DDNS のホストを書く。
+  Tailscale はあくまで**管理用の経路**
+
 ### 名前解決の注意（`.local` は PSP から使えない）
 
 Mac からは `xxx.local` で繋がるが、**PSP クライアントは DNS も mDNS も引かない**
@@ -110,11 +135,18 @@ ssh-keygen -R <ホスト名>      # 例: ssh-keygen -R raspberrypi.local
 
 ```bash
 sudo apt update
-sudo apt install -y git python3-venv ffmpeg
+sudo apt install -y git python3-venv ffmpeg quickjs
 ```
 
 `yt-dlp` は **apt で入れないこと。** Debian のパッケージは古く、YouTube 側の変更で
 すぐ壊れる。後述の venv に pip で入れて、定期的に更新する。
+
+**`quickjs` は必須。** yt-dlp は YouTube の JS チャレンジを外部の
+JavaScript 実行環境に解かせる。無いと**ログインしていても再生用の形式が消え**、
+`Requested format is not available` で曲が取れない。
+対応するのは deno / bun / quickjs / node で、**node だけは 22 以上**が要る。
+Debian が配る node は 20 なので足りない。**Debian で確実なのは quickjs**
+（`qjs` コマンドを入れてくれる）。
 
 ### 2. リポジトリとサーバー
 
@@ -336,12 +368,14 @@ cd ~/pspgo/apps/youtube-music/server
     ここは途中で詰まった場合だけを見ればよい
   **Mac のサーバーでは再現しない**（変換が実時間より十分速いため）
 - **yt-dlp を素で入れると、ログインしていても曲が取れなくなる。**
-  `pip install yt-dlp` だけでは `yt-dlp-ejs` が入らず、YouTube の
-  JS チャレンジを解けないため**取得できる形式が消える**。
-  エラーは `Requested format is not available` で、原因が読み取れない。
-  **必ず `yt-dlp[default]` で入れる**（requirements.txt と週次更新の
-  両方をそう直してある）。サーバーは起動時にこれを確認して、
-  足りなければ入れ方を出して止まる
+  YouTube の JS チャレンジを解くには **2 つ**要る。どちらが欠けても
+  症状は同じ `Requested format is not available` で、原因が読み取れない。
+  1. `yt-dlp-ejs`: `pip install yt-dlp` だけでは入らない。
+     **必ず `yt-dlp[default]` で入れる**（requirements.txt と週次更新の
+     両方をそう直してある）
+  2. **JavaScript の実行環境**: Mac には deno があったので気付かなかったが、
+     Raspberry Pi には何も入っていなかった。`sudo apt install -y quickjs`
+  サーバーは起動時にこの 2 つを確認し、足りなければ入れ方を出して止まる
 - **電源不足の警告が出た** (`vcgencmd get_throttled` が `0x50005`)。
   Pi 4 は 5V/3A が必要。`0x0` 以外なら電源かケーブルを疑う
 - **ホスト名 `.local` は PSP から使えない**（PSP は DNS も mDNS も引かない）。

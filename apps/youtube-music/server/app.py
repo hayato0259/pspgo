@@ -1092,6 +1092,29 @@ class Handler(BaseHTTPRequestHandler):
         self._text("error\tnot found\n", code=404)
 
 
+def js_runtime() -> str:
+    """yt-dlp が使える JavaScript 実行環境の名前。無ければ None。
+
+    yt-dlp は YouTube の JS チャレンジを外部のランタイムに解かせる。
+    対応は deno / bun / quickjs (qjs) / node で、**node だけは 22 以上**が要る
+    (Debian が配る node 20 では足りない)。Debian は quickjs を配っているので、
+    Raspberry Pi ではそれが最も手軽。
+    """
+    for name in ("deno", "bun", "qjs"):
+        if shutil.which(name):
+            return name
+    node = shutil.which("node")
+    if node:
+        try:
+            out = subprocess.run([node, "--version"], capture_output=True,
+                                 text=True, timeout=10).stdout.strip()
+            if int(out.lstrip("v").split(".")[0]) >= 22:
+                return "node"
+        except Exception:
+            pass
+    return None
+
+
 def main():
     port = int(sys.argv[1]) if len(sys.argv) > 1 else 8080
     for tool in ("ffmpeg", "yt-dlp"):
@@ -1101,16 +1124,23 @@ def main():
                 f"(macOS: brew install {tool} / Debian: apt install {tool}。"
                 f"yt-dlp は .venv/bin/pip install -U yt-dlp でも可)"
             )
-    # yt-dlp は YouTube の JS チャレンジを解くのに yt-dlp-ejs を使う。
-    # これが無いと、**ログインしていても取得できる形式が消え**、
-    # 「Requested format is not available」で無音になる。
-    # 症状がエラーの文面から分かりにくいので起動時に確かめる。
+    # yt-dlp は YouTube の JS チャレンジを解かないと再生用の形式を取れない。
+    # 解くには (1) yt-dlp-ejs と (2) JavaScript の実行環境 の両方が要る。
+    # どちらが欠けても症状は同じ「Requested format is not available」で、
+    # **ログインしていても曲が取れず無音になる**。
+    # エラーの文面から原因が分からないので、起動時に確かめて止める。
     try:
         import yt_dlp_ejs  # noqa: F401
     except ImportError:
         sys.exit(
             "yt-dlp の依存が足りません。次を実行してください:\n"
             "  .venv/bin/pip install -U 'yt-dlp[default]'"
+        )
+    if not js_runtime():
+        sys.exit(
+            "JavaScript の実行環境がありません。次のいずれかを入れてください:\n"
+            "  Debian/Raspberry Pi OS: sudo apt install -y quickjs\n"
+            "  macOS:                  brew install deno"
         )
     print(f"[server] auth: {'browser.json' if is_authed() else 'なし (一般向けホーム)'}")
     # Cookie の有無で「Premium 限定の曲が再生できるか」が変わる。
