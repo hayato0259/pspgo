@@ -69,6 +69,12 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
 - sceMp3 のバッファは 64byte アライン、終端不明ストリームは `mp3StreamEnd = 0x7FFFFFFF`
 - 配信フォーマットは MP3 CBR 128kbps / 44.1kHz / stereo に固定（Opus は PSP で不可）
 - Media Engine は排他リソース。ME を使う他プラグインとは共存できない
+- **`sceMpegAvcDecode` の描画先は「ポインタのポインタ」**。フレームバッファのアドレスを
+  入れた変数を作り、その変数のアドレスを渡す。直接渡すと**戻り値 0 のまま画面が真っ黒**
+  になり、ログを見ないと気付けない（`Ignoring invalid video decode address`）。
+  映像の詳細は [apps/youtube-music/docs/verification-video.md](apps/youtube-music/docs/verification-video.md)
+- **`sceVideocodec` は PPSSPP 未実装**。生の H.264 を渡す低レベル API だが
+  エミュレータで検証できないため、映像は `sceMpeg` + PSMF 経路を使う
 
 ## 配布の方針
 

@@ -13,5 +13,9 @@ oauth.json
 
 # PSP の PGF フォント (著作物。テスト時にローカルへ置くだけ)
 *.pgf
+
+# PoC3 の検証用メディア (各自 tools/make_psmf.py で生成する)
+*.pmf
+apps/youtube-music/psp-client/poc3-video/test.mp3
 /wt-*/
 apps/youtube-music/server/server.log
