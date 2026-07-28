@@ -15,6 +15,7 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
   GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
   GET /api/logout            トークン破棄
   GET /stream?yt=<videoId>   音声を MP3 CBR 128kbps で配信
+  GET /video?yt=<videoId>&sec=<秒>  映像を PSMF (H.264 Baseline 480x272) で配信
   GET /stream?file=<path>    ローカルファイルを変換して配信 (検証用)
 
 ログイン: Google 公式の OAuth デバイスコードフロー (テレビ・ゲーム機と同じ方式) を使う。
@@ -379,6 +380,128 @@ HOME_SECTIONS = 20
 HOME_ITEMS_PER_SECTION = 12
 
 
+# --- 映像配信 (PSMF) ------------------------------------------------------
+#
+# PSP の映像デコーダは生の H.264 を受け付けず、Sony 独自コンテナ PSMF を要求する。
+# 中身は「2048 バイトのヘッダ + MPEG プログラムストリーム」で、後半は ffmpeg が作れる。
+# ここでやるのは、ヘッダを組み立てて先頭に付けることと、
+# 映像のストリーム ID を PSP が期待する 0xE0 に直すことの 2 つだけ。
+#
+# 音声は PSMF に入れない。PSMF の音声は Atrac3+ 固定で ffmpeg に実装が無いため。
+# 音声は従来どおり /stream から MP3 で配る (PSP 側で別々に再生する)。
+# 詳細: docs/verification-video.md
+
+VIDEO_W = 480          # PSP の画面
+VIDEO_H = 272
+VIDEO_FPS = 24         # 30 だと Media Engine が間に合わない可能性があるため控えめに
+VIDEO_BITRATE = 400_000
+PSMF_HEADER_SIZE = 2048
+PACK_SIZE = 2048
+PTS_HZ = 90000
+PSMF_VIDEO_STREAM_ID = 0xE0
+
+
+def psmf_header(stream_size: int, seconds: int) -> bytes:
+    """PSMF ヘッダ (2048 バイト) を組み立てる。
+
+    配信しながら作るので実際の長さは分からない。長さは呼び出し側が渡す
+    再生時間からの見積もりでよい (PSP 側はデータが尽きた時点で終わる)。
+    """
+    import struct
+    h = bytearray(PSMF_HEADER_SIZE)
+    h[0:4] = b"PSMF"
+    h[4:8] = b"0015"
+    struct.pack_into(">I", h, 0x08, PSMF_HEADER_SIZE)      # 本体の開始位置
+    struct.pack_into(">I", h, 0x0C, stream_size)           # 本体の長さ
+    first = PTS_HZ                                          # 慣例として 1 秒から始める
+    last = first + max(1, seconds) * PTS_HZ
+    h[0x54:0x5A] = struct.pack(">Q", first)[2:]            # 最初の表示時刻
+    h[0x5A:0x60] = struct.pack(">Q", last)[2:]             # 最後の表示時刻
+    struct.pack_into(">H", h, 0x80, 1)                     # ストリーム数
+    e = 0x82                                               # ストリーム表 (16 バイト)
+    h[e] = PSMF_VIDEO_STREAM_ID
+    struct.pack_into(">I", h, e + 4, 0)                    # 頭出し表は作らない
+    struct.pack_into(">I", h, e + 8, 0)
+    h[e + 12] = VIDEO_W // 16                              # 幅・高さは 16 画素単位
+    h[e + 13] = VIDEO_H // 16
+    return bytes(h)
+
+
+def video_procs(video_id: str):
+    """yt-dlp → ffmpeg をつないで MPEG プログラムストリームを吐かせる。
+
+    映像と音声が 1 本にまとまった 360p の形式 (itag 18) を優先する。
+    映像だけの形式は分割配信で、標準出力へ流し込む取り方だと
+    403 で弾かれるため使えない (音声側で m4a を優先しているのと同じ理由)。
+    音声はここでは捨てる。元が 640x360 でも 480x272 に縮めるので画質に影響はない。
+    """
+    url = video_id
+    if not url.startswith("http"):
+        url = f"https://music.youtube.com/watch?v={video_id}"
+    ydl = subprocess.Popen(
+        [
+            "yt-dlp", "--no-warnings", "-o", "-",
+            "-f", "18/best[height<=480][ext=mp4][acodec!=none]/best[acodec!=none]",
+            url,
+        ],
+        stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+    )
+    ff = subprocess.Popen(
+        [
+            "ffmpeg", "-hide_banner", "-loglevel", "error",
+            "-i", "pipe:0",
+            "-an",
+            "-c:v", "libx264",
+            "-profile:v", "baseline",      # PSP はこれしかデコードできない
+            "-level", "3.0",
+            "-preset", "veryfast",         # Pi で動かすので速度優先
+            "-pix_fmt", "yuv420p",
+            "-vf", f"scale={VIDEO_W}:{VIDEO_H}:force_original_aspect_ratio=decrease,"
+                   f"pad={VIDEO_W}:{VIDEO_H}:(ow-iw)/2:(oh-ih)/2",
+            "-r", str(VIDEO_FPS),
+            "-g", str(VIDEO_FPS),          # 1 秒ごとに I フレーム
+            "-bf", "0",                    # Baseline は B フレームを持てない
+            "-b:v", str(VIDEO_BITRATE),
+            "-maxrate", str(VIDEO_BITRATE),
+            "-bufsize", str(VIDEO_BITRATE),
+            "-preload", "1000000",         # 最初の表示時刻を 90000 に合わせる
+            "-f", "vob", "-packetsize", str(PACK_SIZE),
+            "pipe:1",
+        ],
+        stdin=ydl.stdout, stdout=subprocess.PIPE, stderr=subprocess.DEVNULL,
+    )
+    ydl.stdout.close()
+    return ydl, ff
+
+
+def read_exact(stream, size: int) -> bytes:
+    """size バイト読み切る。終端なら読めた分だけ返す (パック境界を保つため)。"""
+    chunks = []
+    remaining = size
+    while remaining > 0:
+        part = stream.read(remaining)
+        if not part:
+            break
+        chunks.append(part)
+        remaining -= len(part)
+    return b"".join(chunks)
+
+
+def retag_video_stream(buf: bytearray) -> None:
+    """ffmpeg が付けた 0xE0 番台のストリーム ID を 0xE0 に揃える (その場で書き換え)。
+
+    ffmpeg は H.264 に 0xE2 を割り当てるが、PSP は 0xE0 しか映像として扱わない。
+    """
+    i = 0
+    while True:
+        i = buf.find(b"\x00\x00\x01", i)
+        if i < 0 or i + 3 >= len(buf):
+            break
+        if 0xE0 <= buf[i + 3] <= 0xEF:
+            buf[i + 3] = PSMF_VIDEO_STREAM_ID
+        i += 3
+
+
 def tsv_home() -> str:
     sections, fellback = with_fallback(
         lambda yt: yt.get_home(limit=HOME_SECTIONS), "ホーム取得")
@@ -592,9 +715,51 @@ class Handler(BaseHTTPRequestHandler):
         sys.stderr.write(f"[server] {message}\n")
         sys.stderr.flush()
 
+    def _stream_psmf(self, procs, tail, seconds, source=None):
+        """PSMF ヘッダを先に送り、続けて MPEG プログラムストリームを流す。
+
+        配信しながらなので本体の長さは分からない。再生時間とビットレートから
+        見積もった値をヘッダに書く (PSP 側はデータが尽きた時点で終わるので、
+        多少ずれても再生には影響しない)。
+        """
+        seconds = seconds if seconds > 0 else 300
+        estimate = seconds * VIDEO_BITRATE // 8
+        estimate = ((estimate + PACK_SIZE - 1) // PACK_SIZE) * PACK_SIZE
+
+        self.send_response(200)
+        self.send_header("Content-Type", "application/octet-stream")
+        self.end_headers()
+        sent = 0
+        try:
+            self.wfile.write(psmf_header(estimate, seconds))
+            while True:
+                # パック単位で読む。開始コードがパックをまたぐことは無いので、
+                # 境界を揃えておけば書き換えが安全にできる
+                buf = read_exact(tail.stdout, PACK_SIZE * 8)
+                if not buf:
+                    break
+                block = bytearray(buf)
+                retag_video_stream(block)
+                self.wfile.write(block)
+                sent += len(block)
+        except (BrokenPipeError, ConnectionResetError):
+            self.log_message("client disconnected after %d bytes", sent)
+        finally:
+            for p in procs:
+                if p.poll() is None:
+                    p.terminate()
+            self.log_message("video done: %d bytes", sent)
+            if sent == 0 and source is not None and source.stderr is not None:
+                try:
+                    err = source.stderr.read(4000).decode("utf-8", "replace").strip()
+                except Exception:
+                    err = ""
+                self.log_message("映像を取得できませんでした: %s",
+                                 err or "(理由の出力なし)")
+
     @staticmethod
     def _protected_path(path: str) -> bool:
-        return path.startswith("/api/") or path in ("/art", "/stream")
+        return path.startswith("/api/") or path in ("/art", "/stream", "/video")
 
     def _authorized(self, path: str, query: dict) -> bool:
         if not self._protected_path(path):
@@ -723,6 +888,15 @@ class Handler(BaseHTTPRequestHandler):
         if url.path == "/stream" and "file" in q:
             ff = subprocess.Popen(ffmpeg_cmd(q["file"][0]), stdout=subprocess.PIPE)
             self._stream_process([ff], ff)
+            return
+
+        if url.path == "/video" and "yt" in q:
+            try:
+                seconds = int(q.get("sec", ["0"])[0] or 0)
+            except ValueError:
+                seconds = 0
+            ydl, ff = video_procs(q["yt"][0])
+            self._stream_psmf([ydl, ff], ff, seconds, source=ydl)
             return
 
         if url.path == "/stream" and "yt" in q:
