@@ -16,18 +16,32 @@
 #include "common.h"
 
 /* --- 接続先サーバーの実行時解決 ------------------------------------------
- * EBOOT と同じフォルダの server.txt を読む。書式は 1 行目に
+ * EBOOT と同じフォルダの server.txt を読む。書式は 1 行目に接続先、
+ * 2 行目に外部公開用の共有トークン:
  *   192.168.0.5:8080   (ポート省略時は 8080)
- *   myhome.example.net:8080
+ *   <token>
  * ファイルが無ければコンパイル時既定 (開発時は 127.0.0.1 = PPSSPP) を使う。
  */
 static char g_srv_host[64] = SERVER_HOST;
 static int g_srv_port = SERVER_PORT;
+static char g_srv_token[128] = "";
 static int g_srv_loaded = 0;
 static unsigned int g_srv_ip;
 static int g_srv_ip_ok = 0;
 static char g_srv_ip_host[64];
 static char g_resolver_buf[1024] __attribute__((aligned(64)));
+
+static char *trim_line(char *line)
+{
+    char *p = line;
+    while (*p == ' ' || *p == '\t')
+        p++;
+    char *e = p + strlen(p);
+    while (e > p && (e[-1] == '\n' || e[-1] == '\r' ||
+                     e[-1] == ' ' || e[-1] == '\t'))
+        *--e = '\0';
+    return p;
+}
 
 void net_load_server_config(void)
 {
@@ -36,14 +50,7 @@ void net_load_server_config(void)
         return;
     char line[128] = "";
     if (fgets(line, sizeof(line), fp)) {
-        /* 前後の空白・改行を落とす */
-        char *p = line;
-        while (*p == ' ' || *p == '\t')
-            p++;
-        char *e = p + strlen(p);
-        while (e > p && (e[-1] == '\n' || e[-1] == '\r' ||
-                         e[-1] == ' ' || e[-1] == '\t'))
-            *--e = '\0';
+        char *p = trim_line(line);
 
         char *colon = strchr(p, ':');
         if (colon) {
@@ -57,12 +64,33 @@ void net_load_server_config(void)
             g_srv_loaded = 1;
         }
     }
+    if (fgets(line, sizeof(line), fp)) {
+        char *token = trim_line(line);
+        snprintf(g_srv_token, sizeof(g_srv_token), "%s", token);
+    }
     fclose(fp);
 }
 
 const char *net_server_host(void) { return g_srv_host; }
 int net_server_port(void) { return g_srv_port; }
+const char *net_server_token(void) { return g_srv_token; }
 int net_server_config_loaded(void) { return g_srv_loaded; }
+
+int net_build_path(char *out, int size, const char *path)
+{
+    if (!out || size <= 0 || !path)
+        return -1;
+
+    int n;
+    if (g_srv_token[0]) {
+        char separator = strchr(path, '?') ? '&' : '?';
+        n = snprintf(out, (size_t)size, "%s%ck=%s",
+                     path, separator, g_srv_token);
+    } else {
+        n = snprintf(out, (size_t)size, "%s", path);
+    }
+    return (n >= 0 && n < size) ? 0 : -1;
+}
 
 struct in_addr_psp { unsigned int s_addr; };
 struct sockaddr_in_psp {
