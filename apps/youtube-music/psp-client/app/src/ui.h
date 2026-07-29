@@ -40,4 +40,10 @@ void ui_now_playing(const char *art_id, const char *title, const char *artist,
 void ui_selection_info(const char *art_id, const char *title,
                        const char *subtitle, int bottom, int slim);
 
+/* リストのカーソル移動に追従してスクロール位置を直す (LIST_ROWS 行表示) */
+void scroll_to(int sel, int *scroll);
+
+/* ダウンロード進行中は画面右上に残数と曲名を小さく出す */
+void dl_status_line(void);
+
 #endif

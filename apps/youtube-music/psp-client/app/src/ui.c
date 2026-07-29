@@ -8,6 +8,7 @@
 #include "gfx.h"
 #include "theme.h"
 #include "art.h"
+#include "dl.h"
 #include "common.h"
 
 /* --- 背景 ----------------------------------------------------------------
@@ -111,6 +112,26 @@ void ui_selection_info(const char *art_id, const char *title,
             text_clipped(tx, top + 30, SCR_W - (int)tx - MARGIN,
                          C_DIM, 0.55f, subtitle);
     }
+}
+
+/* --- リスト共通 ---------------------------------------------------------- */
+
+void scroll_to(int sel, int *scroll)
+{
+    if (sel < *scroll)
+        *scroll = sel;
+    if (sel >= *scroll + LIST_ROWS)
+        *scroll = sel - LIST_ROWS + 1;
+}
+
+void dl_status_line(void)
+{
+    int n = dl_pending();
+    if (n <= 0)
+        return;
+    char buf[176];
+    snprintf(buf, sizeof(buf), "↓%d  %s", n, dl_current_title());
+    text_clipped(SCR_W - MARGIN - 150, 30, 150, C_DIM, 0.5f, buf);
 }
 
 /* --- 再生バー ------------------------------------------------------------ */
