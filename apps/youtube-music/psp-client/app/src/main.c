@@ -26,6 +26,7 @@
 #include "store.h"
 #include "dl.h"
 #include "trackinfo.h"
+#include "prefetch.h"
 
 PSP_MODULE_INFO("ytmusic", 0, 0, 1);
 PSP_MAIN_THREAD_ATTR(THREAD_ATTR_USER | THREAD_ATTR_VFPU);
@@ -136,6 +137,7 @@ int main(void)
     snd_init();
     dl_init();
     trackinfo_init();
+    prefetch_init();
 
     Screen scr = SCR_CONNECT;
     while (g_running) {
@@ -153,6 +155,9 @@ int main(void)
             player_stop();
             g_playing_index = -1;
         }
+
+        /* 次に流れる曲をサーバーに先読みさせる (曲間の待ちを消す) */
+        queue_prefetch_tick();
 
         /* 曲が終わったら、どの画面にいても自動で次の曲へ進む */
         if (player_state() == PLAYER_FINISHED && g_playing_index >= 0) {

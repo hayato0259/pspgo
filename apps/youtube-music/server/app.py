@@ -14,6 +14,7 @@ PSP クライアントの制約 (HTTP/1.0・MP3 CBR・JSON パーサなし) に�
   GET /api/trackinfo?yt=<videoId> 再生中の曲: cur\tsong|video / like\t… / meta\t… / lib\t… / alt\t…
   GET /api/rate?yt=<videoId>&r=like|dislike|none  高評価・低評価
   GET /api/library?yt=<videoId>&s=0|1  ライブラリへの保存 / 解除
+  GET /api/prefetch?yt=<videoId>  次に再生する曲を裏で変換してキャッシュする
   GET /api/login/start       ログイン開始: code\t<入力コード> / url\t<URL> / interval\t<秒>
   GET /api/login/poll        ログイン待ち: state\tpending|ok  (失敗時 error\t<理由>)
   GET /api/logout            トークン破棄
@@ -543,6 +544,130 @@ def video_procs(video_id: str, start_sec: int = 0, cookies: bool = False):
     return ydl, ff
 
 
+def audio_procs(video_id: str, start_sec: int = 0, cookies: bool = False):
+    """yt-dlp → ffmpeg をつないで MP3 CBR を吐かせる (音声版の video_procs)。
+
+    m4a (AAC) を優先する。Opus/WebM はパイプ経由で
+    ffmpeg が扱えない場合があり、無音のまま 0 バイトになる。
+    """
+    target = video_id
+    if not target.startswith("http"):
+        target = f"https://music.youtube.com/watch?v={video_id}"
+    ydl = subprocess.Popen(
+        ytdlp_cmd(
+            "-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio",
+            target,
+            cookies=cookies,
+        ),
+        stdout=subprocess.PIPE,
+        stderr=subprocess.PIPE,
+    )
+    ff = subprocess.Popen(
+        ffmpeg_cmd("pipe:0", start_sec),
+        stdin=ydl.stdout, stdout=subprocess.PIPE,
+    )
+    ydl.stdout.close()
+    return ydl, ff
+
+
+# --- 先読み (次の曲のスプール) --------------------------------------------
+#
+# 曲の切り替えで数秒待たされるのは、/stream のたびに yt-dlp + ffmpeg を
+# ゼロから起動するため (取得開始まで匿名でも約 3 秒)。
+# クライアントは再生が安定したところで次の曲を /api/prefetch に伝え、
+# サーバーは裏で変換して cache/<id>.mp3 に書き溜めておく。
+# 次の /stream は変換の途中でもファイルを追いかけ読みして即座に配信を始める。
+#
+# シーク (t>0) はスプールを使わない (t=0 の変換結果だから)。
+
+CACHE_DIR = Path(__file__).parent / "cache"
+SPOOL_MAX_FILES = 20          # 128kbps なので 1 曲 4-5MB、20 曲で 100MB 弱
+SPOOL_MAX_RUNNING = 1         # Pi は再生中の変換と併走するので 1 本に絞る
+_spool: dict = {}             # id -> "running" | "done"
+_spool_lock = threading.Lock()
+
+
+def spool_path(video_id: str) -> Path:
+    return CACHE_DIR / f"{video_id}.mp3"
+
+
+def spool_prune() -> None:
+    """完成品を新しい順に SPOOL_MAX_FILES - 1 件まで残す。古い .part も掃除。"""
+    files = sorted(CACHE_DIR.glob("*.mp3"), key=lambda p: p.stat().st_mtime)
+    if len(files) >= SPOOL_MAX_FILES:
+        for old in files[: len(files) - (SPOOL_MAX_FILES - 1)]:
+            old.unlink(missing_ok=True)
+            with _spool_lock:
+                _spool.pop(old.stem, None)
+    now = time.time()
+    for part in CACHE_DIR.glob("*.part"):
+        if now - part.stat().st_mtime > 3600:
+            part.unlink(missing_ok=True)
+
+
+def _prefetch_worker(video_id: str) -> None:
+    part = CACHE_DIR / f"{video_id}.part"
+    ok = False
+    try:
+        # 匿名で試し、1 バイトも出なければ Cookie で取り直す (/stream と同じ)
+        tries = (False, True) if COOKIES_FILE.exists() else (False,)
+        for use_cookies in tries:
+            ydl, ff = audio_procs(video_id, 0, cookies=use_cookies)
+            first = ff.stdout.read(CHUNK)
+            if not first:
+                for p in (ydl, ff):
+                    if p.poll() is None:
+                        p.terminate()
+                continue
+            with open(part, "wb") as out:
+                out.write(first)
+                while True:
+                    buf = ff.stdout.read(CHUNK)
+                    if not buf:
+                        break
+                    out.write(buf)
+            for p in (ydl, ff):
+                if p.poll() is None:
+                    p.terminate()
+            # 極端に小さいものはエラー本文とみなす (dl.c と同じ基準)
+            if part.exists() and part.stat().st_size >= 64 * 1024:
+                part.rename(spool_path(video_id))
+                ok = True
+            break
+    except Exception as e:
+        print(f"[server] 先読みに失敗 ({video_id}): {e!r}", file=sys.stderr)
+    finally:
+        with _spool_lock:
+            if ok:
+                _spool[video_id] = "done"
+            else:
+                _spool.pop(video_id, None)   # 消しておけば次の機会にやり直せる
+        if not ok:
+            part.unlink(missing_ok=True)
+        print(f"[server] prefetch {'done' if ok else 'miss'}: {video_id}",
+              flush=True)
+
+
+def prefetch_start(video_id: str) -> str:
+    if not re.fullmatch(r"[0-9A-Za-z_-]{6,20}", video_id):
+        return "error\tid が不正です\n"
+    if spool_path(video_id).exists():
+        return "state\tcached\n"
+    with _spool_lock:
+        if video_id in _spool:
+            return "state\talready\n"
+        running = sum(1 for v in _spool.values() if v == "running")
+        if running >= SPOOL_MAX_RUNNING:
+            # 続けて曲を飛ばしたときに変換を積み上げない (Pi が詰まる)
+            return "state\tbusy\n"
+        _spool[video_id] = "running"
+    CACHE_DIR.mkdir(parents=True, exist_ok=True)
+    spool_prune()
+    threading.Thread(target=_prefetch_worker, args=(video_id,),
+                     daemon=True).start()
+    return "state\tok\n"
+
+
 def query_int(q: dict, key: str) -> int:
     """クエリの整数値を取り出す。無い・壊れているなら 0。"""
     try:
@@ -956,6 +1081,70 @@ class Handler(BaseHTTPRequestHandler):
                 p.terminate()
         self.log_message("%s: %s", what, err or "(理由の出力なし)")
 
+    def _serve_spool(self, video_id) -> bool:
+        """先読みキャッシュから配信できたら True。何も送っていなければ False。
+
+        変換の途中でもファイルを追いかけ読みして配信する。
+        .part を開いたまま完成 (rename) しても、開いた fd はそのまま有効。
+        """
+        path = spool_path(video_id)
+        part = CACHE_DIR / f"{video_id}.part"
+        f = None
+        for _ in range(100):   # 開始直後はファイルがまだ無いことがある (~5秒待つ)
+            for cand in (path, part):
+                try:
+                    f = open(cand, "rb")
+                    break
+                except FileNotFoundError:
+                    continue
+            if f:
+                break
+            with _spool_lock:
+                st = _spool.get(video_id)
+            if st != "running":
+                return False   # 完成品も進行中も無い (失敗して消えた等)
+            time.sleep(0.05)
+        if f is None:
+            return False
+
+        def read_wait():
+            while True:
+                buf = f.read(CHUNK)
+                if buf:
+                    return buf
+                with _spool_lock:
+                    st = _spool.get(video_id)
+                if st != "running":
+                    return b""   # done なら終端、消えていれば打ち切り
+                time.sleep(0.05)
+
+        buf = read_wait()
+        if not buf:
+            f.close()
+            return False
+
+        # 使ったものを新しい扱いにする (LRU で消されにくくする)
+        try:
+            os.utime(path)
+        except OSError:
+            pass
+
+        self.send_response(200)
+        self.send_header("Content-Type", "audio/mpeg")
+        self.end_headers()
+        sent = 0
+        try:
+            while buf:
+                self.wfile.write(buf)
+                sent += len(buf)
+                buf = read_wait()
+        except (BrokenPipeError, ConnectionResetError):
+            self.log_message("client disconnected after %d bytes", sent)
+        finally:
+            f.close()
+            self.log_message("stream done (spool): %d bytes", sent)
+        return True
+
     def _stream_process(self, procs, tail, source=None, retry=None):
         """MP3 を流す。最初の塊が届くまで応答を始めない。
 
@@ -1032,6 +1221,9 @@ class Handler(BaseHTTPRequestHandler):
             if url.path == "/api/library" and "yt" in q:
                 self._text(tsv_library(q["yt"][0], query_int(q, "s")))
                 return
+            if url.path == "/api/prefetch" and "yt" in q:
+                self._text(prefetch_start(q["yt"][0]))
+                return
         except Exception as e:
             # 保存済みトークンが失効・無効化されていると Google が 401 を返す。
             # 生のエラーを出す代わりに再ログインを促す (トークンは消さない)。
@@ -1097,26 +1289,20 @@ class Handler(BaseHTTPRequestHandler):
             return
 
         if url.path == "/stream" and "yt" in q:
-            target = q["yt"][0]
-            if not target.startswith("http"):
-                target = f"https://music.youtube.com/watch?v={target}"
+            vid = q["yt"][0]
+            start_sec = query_int(q, "t")
+
+            # 先読み済み (または変換中) ならキャッシュから配信する。
+            # シーク (t>0) は先頭からの変換結果なので使えない
+            if start_sec == 0 and not vid.startswith("http"):
+                with _spool_lock:
+                    spooled = vid in _spool
+                if (spooled or spool_path(vid).exists()) and \
+                        self._serve_spool(vid):
+                    return
+
             def make_audio(cookies=False):
-                ydl = subprocess.Popen(
-                    ytdlp_cmd(
-                        # m4a (AAC) を優先する。Opus/WebM はパイプ経由で
-                        # ffmpeg が扱えない場合があり、無音のまま 0 バイトになる
-                        "-f", "bestaudio[ext=m4a]/bestaudio[acodec^=mp4a]/bestaudio",
-                        target,
-                        cookies=cookies,
-                    ),
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                )
-                ff = subprocess.Popen(
-                    ffmpeg_cmd("pipe:0", query_int(q, "t")),
-                    stdin=ydl.stdout, stdout=subprocess.PIPE
-                )
-                ydl.stdout.close()
+                ydl, ff = audio_procs(vid, start_sec, cookies=cookies)
                 return [ydl, ff], ff, ydl
 
             procs, tail, src = make_audio()

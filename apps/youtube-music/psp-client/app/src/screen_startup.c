@@ -149,10 +149,7 @@ Screen screen_connect_tick(void)
         g_welcome_sel = 0;
         return SCR_WELCOME;
     }
-    if (load_home() < 0) {
-        step = 99;
-        return SCR_CONNECT;
-    }
+    home_load_begin();
     return SCR_HOME;
 }
 
@@ -171,8 +168,7 @@ Screen screen_welcome_tick(void)
             login_begin();
             return SCR_LOGIN;
         }
-        if (load_home() < 0)
-            return SCR_WELCOME;
+        home_load_begin();
         return SCR_HOME;
     }
 
@@ -210,8 +206,7 @@ Screen screen_login_tick(void)
         /* 認証状態とホームを取り直す */
         int rc = api_status(g_account, sizeof(g_account), &g_can_login);
         g_auth = (rc > 0);
-        if (load_home() < 0)
-            return SCR_WELCOME;
+        home_load_begin();
         return SCR_HOME;
     }
 

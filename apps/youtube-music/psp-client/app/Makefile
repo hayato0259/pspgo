@@ -1,5 +1,5 @@
 TARGET = ytmusic
-OBJS = src/main.o src/queue.o \
+OBJS = src/main.o src/queue.o src/prefetch.o \
        src/screen_startup.o src/screen_home.o src/screen_search.o \
        src/screen_lists.o src/screen_player.o \
        src/gfx.o src/ui.o src/net.o src/api.o src/player.o src/login.o \

@@ -51,6 +51,12 @@ void queue_from_single(const ApiItem *item);
 /* 再生中の曲のラジオでキューを置き換える。0=成功 (再生中の音声には触れない) */
 int replace_queue_with_radio(void);
 
+/*
+ * 次の曲の先読み。再生が安定したらサーバーへ /api/prefetch を送る。
+ * main のループから毎フレーム呼ぶ。
+ */
+void queue_prefetch_tick(void);
+
 /* --- スリープタイマー --- */
 void cycle_sleep_timer(void);                    /* オフ→15→30→60→90分 */
 int sleep_timer_tick(void);                      /* 満了したフレームで 1 */

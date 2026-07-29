@@ -47,9 +47,9 @@ Screen screen_offline_tick(void);
 Screen screen_player_tick(void);    /* screen_player.c */
 Screen screen_lyrics_tick(void);
 
-/* ホームを取得して最初の選択可能行へカーソルを置く。
-   接続・ログイン画面からも呼ぶ。0=成功 (失敗時は g_error に理由) */
-int load_home(void);
+/* ホームの取得を裏で始める (取得中のホーム画面はスケルトンを描く)。
+   接続・ログイン画面から、SCR_HOME へ移る直前に呼ぶ */
+void home_load_begin(void);
 
 /* 検索入力 (OSK) を開く。first_prompt: 検索画面へ入った直後の入力なら真
    (キャンセル時にホームへ戻すため)。0=成功 */

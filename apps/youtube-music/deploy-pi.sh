@@ -50,6 +50,7 @@ EXCLUDES=(
     --exclude '__pycache__/'
     --exclude '*.pyc'
     --exclude 'server.log'
+    --exclude 'cache/'         # 先読みキャッシュ。Pi 側で育つので消さない
     --exclude 'tests/__pycache__/'
     --exclude '.DS_Store'      # macOS が撒くメタデータを Linux 側へ持ち込まない
     --exclude '._*'

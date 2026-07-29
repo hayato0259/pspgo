@@ -6,6 +6,7 @@
  * 左右でカード移動、上下でセクション移動。
  * 曲だけのセクションは PC 版の「おすすめ」と同じコンパクトな行リスト形式。
  */
+#include <pspkernel.h>
 #include <pspctrl.h>
 #include <math.h>
 #include <string.h>
@@ -39,19 +40,57 @@ static int g_section_count = 0;
 static int g_section_sel = 0;    /* 選択中のセクション */
 static int g_section_top = 0;    /* 画面最上部に表示するセクション */
 
-/* ホームを取得して最初の選択可能行へカーソルを置く。0=成功 */
-int load_home(void)
+/*
+ * ホームの取得は専用スレッドで行い、待っている間は骨組み (スケルトン) を
+ * 描く。取得は 1〜数秒かかるので、描画スレッドで待つと画面が固まる。
+ *
+ * api_home は共有バッファ (api.c の g_buf) を使うため、取得中は
+ * UI スレッドから他の API (検索など) を呼んではいけない。
+ * この画面では読み込み中の入力を △ (オフライン) だけに絞って守っている。
+ */
+typedef enum { HOME_MOUNTED, HOME_LOADING, HOME_READY, HOME_FAILED } HomeLoad;
+static volatile HomeLoad g_load_state = HOME_MOUNTED;
+static volatile int g_load_result = 0;
+static SceUID g_load_thread = -1;
+
+static int home_load_thread(SceSize args, void *argp)
 {
-    g_home_count = api_home(g_home_items, API_MAX_ITEMS);
-    if (g_home_count < 0) {
-        /* サーバーが理由を返していればそれを見せる (単なる空表示にしない) */
-        if (api_last_error()[0])
-            snprintf(g_error, sizeof(g_error), "%s", api_last_error());
-        else
-            snprintf(g_error, sizeof(g_error),
-                     "ホームを取得できません (通信エラー %d)", g_home_count);
-        return -1;
+    int n = api_home(g_home_items, API_MAX_ITEMS);
+    g_load_result = n;
+    g_load_state = (n < 0) ? HOME_FAILED : HOME_READY;
+    return 0;
+}
+
+void home_load_begin(void)
+{
+    if (g_load_state == HOME_LOADING)
+        return;
+    if (g_load_thread >= 0) {
+        SceUInt timeout = 100 * 1000;
+        sceKernelWaitThreadEnd(g_load_thread, &timeout);
+        sceKernelDeleteThread(g_load_thread);
+        g_load_thread = -1;
     }
+    g_load_state = HOME_LOADING;
+    g_load_thread = sceKernelCreateThread("home_load", home_load_thread,
+                                          0x1B, 0x4000, 0, 0);
+    if (g_load_thread < 0) {
+        /* スレッドを作れなければ最後の手段としてこの場で取る (描画は止まる) */
+        home_load_thread(0, NULL);
+        return;
+    }
+    sceKernelStartThread(g_load_thread, 0, 0);
+}
+
+/* 取得済みのデータからセクション構造を組み立て、カーソルを先頭へ置く */
+static void home_mount(void)
+{
+    g_home_count = g_load_result;
+    if (g_home_count < 0) {
+        g_home_count = 0;
+        return;
+    }
+    g_error[0] = '\0';   /* 接続時などの古いエラー文を残さない */
     /* section 行を見出しに、その後に続く行をカードとしてまとめる */
     g_section_count = 0;
     for (int i = 0; i < g_home_count; i++) {
@@ -85,7 +124,6 @@ int load_home(void)
         g_section_sel++;
     if (g_section_sel >= g_section_count)
         g_section_sel = 0;
-    return 0;
 }
 
 /*
@@ -116,8 +154,72 @@ static ApiItem *selected_card(void)
     return &g_home_items[idx];
 }
 
+/* 読み込み中の骨組み (本家のスケルトンと同じ構図)。うっすら明滅させる */
+static void draw_home_skeleton(void)
+{
+    int v = 0x1E + (int)(6.0f * (1.0f + sinf((float)gfx_frame * 0.06f)));
+    unsigned int c = 0xFF000000 |
+                     ((unsigned)v << 16) | ((unsigned)v << 8) | (unsigned)v;
+    for (int row = 0; row < 2; row++) {
+        int base_y = ROW_TOP + row * ROW_PITCH;
+        draw_rect(MARGIN, base_y - 10, 120, 12, c);          /* 見出しの棒 */
+        for (int x = MARGIN; x < SCR_W - MARGIN; x += CARD_PITCH)
+            gfx_card_fill((float)x, (float)(base_y + 8), CARD_SIZE, c);
+    }
+}
+
 Screen screen_home_tick(void)
 {
+    /* 裏で取得が終わっていたら、このフレームで組み立てて通常表示に移る */
+    if (g_load_state == HOME_READY) {
+        home_mount();
+        g_load_state = HOME_MOUNTED;
+    }
+
+    if (g_load_state == HOME_LOADING) {
+        /* △ 以外の操作は受けない (取得スレッドが API の共有バッファを
+           使用中のため、検索などを重ねて呼べない) */
+        if (g_pressed & PSP_CTRL_TRIANGLE) {
+            snd_play(SND_OK);
+            offline_reset_cursor();
+            return SCR_OFFLINE;
+        }
+        ui_bg_ambient(0);
+        ui_frame_begin();
+        ui_top_bar(g_auth, g_account);
+        draw_home_skeleton();
+        now_playing_bar();
+        gfx_frame_end();
+        return SCR_HOME;
+    }
+
+    if (g_load_state == HOME_FAILED) {
+        if (g_pressed & PSP_CTRL_CIRCLE) {   /* ○ でやり直す */
+            snd_play(SND_OK);
+            home_load_begin();
+            return SCR_HOME;
+        }
+        if (g_pressed & PSP_CTRL_TRIANGLE) {
+            snd_play(SND_OK);
+            offline_reset_cursor();
+            return SCR_OFFLINE;
+        }
+        ui_bg_ambient(0);
+        ui_frame_begin();
+        ui_chrome("YouTube Music", "○: 再読み込み    △: オフライン",
+                  g_auth, g_account);
+        text(24, 90, C_ACCENT, 0.85f, "ホームを取得できませんでした");
+        {
+            const char *reason = api_last_error()[0]
+                ? api_last_error() : "サーバーとの通信に失敗しました";
+            intraFontSetStyle(gfx_font(), 0.7f, C_DIM, GFX_TEXT_SHADOW, 0.0f, 0);
+            intraFontPrintColumn(gfx_font(), 24, 118, SCR_W - 48, reason);
+        }
+        now_playing_bar();
+        gfx_frame_end();
+        return SCR_HOME;
+    }
+
     Section *sec = (g_section_sel < g_section_count) ? &g_sections[g_section_sel] : NULL;
     int compact = (sec && section_compact(sec));
 

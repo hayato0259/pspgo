@@ -7,10 +7,13 @@
 #include <string.h>
 #include <stdlib.h>
 #include <stdio.h>
+#include "app.h"
 #include "queue.h"
 #include "player.h"
 #include "snd.h"
 #include "ui.h"
+#include "store.h"
+#include "prefetch.h"
 
 ApiTrack g_tracks[API_MAX_TRACKS];
 int g_track_count = 0;
@@ -202,6 +205,58 @@ int replace_queue_with_radio(void)
     snprintf(g_pl_title, sizeof(g_pl_title), "ラジオ: %.88s", current.title);
     shuffle_history_reset();
     return 0;
+}
+
+/* --- 次の曲の先読み ------------------------------------------------------- */
+
+/*
+ * 再生モードから次に来る曲を覗く (next_track_index と違い履歴は動かさない)。
+ * シャッフルは選ぶまで分からず、1曲リピートは今の曲のままなので -1。
+ */
+static int peek_next_index(void)
+{
+    if (g_playing_index < 0 || g_playing_index >= g_track_count)
+        return -1;
+    if (g_play_mode == PLAY_MODE_NORMAL)
+        return (g_playing_index + 1 < g_track_count)
+                   ? g_playing_index + 1 : -1;
+    if (g_play_mode == PLAY_MODE_REPEAT_ALL)
+        return (g_playing_index + 1) % g_track_count;
+    return -1;
+}
+
+/*
+ * 曲の切り替えで数秒待つのは、サーバーが /stream のたびに取得と変換を
+ * ゼロから始めるため。再生が 5 秒安定したら次の曲をサーバーに伝え、
+ * 裏で変換してキャッシュしてもらう (曲間の待ちがほぼ消える)。
+ *
+ * 開始 5 秒待つのは、続けて曲を飛ばしているときに依頼を積み上げないため。
+ * 毎フレーム呼ぶ (main のループから)。
+ */
+void queue_prefetch_tick(void)
+{
+    static char cur_id[24] = "";
+    static int stable = 0;
+
+    if (!g_net_ok || player_state() != PLAYER_PLAYING ||
+        g_playing_index < 0 || g_playing_index >= g_track_count) {
+        stable = 0;
+        return;
+    }
+    const ApiTrack *cur = &g_tracks[g_playing_index];
+    if (strcmp(cur_id, cur->video_id) != 0) {
+        snprintf(cur_id, sizeof(cur_id), "%s", cur->video_id);
+        stable = 0;
+    }
+    if (++stable != 60 * 5)
+        return;   /* この曲では一度だけ */
+
+    int next = peek_next_index();
+    if (next < 0 || next == g_playing_index)
+        return;
+    if (store_has(g_tracks[next].video_id))
+        return;   /* ダウンロード済みはローカル再生なので先読み不要 */
+    prefetch_request(g_tracks[next].video_id);
 }
 
 /* --- スリープタイマー ----------------------------------------------------- */
