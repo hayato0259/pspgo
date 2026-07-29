@@ -28,7 +28,6 @@ static volatile int g_quit = 0;
 
 static char g_current[128] = "";
 static char g_current_id[24] = "";
-static volatile int g_done = 0, g_failed = 0;
 
 static unsigned char g_rx[RXBUF];
 static unsigned char g_art[ART_SIDE * ART_SIDE * 4 + 64];
@@ -148,19 +147,14 @@ static int dl_thread(SceSize args, void *argp)
 
         char mp3[128];
         int bytes = save_mp3(&t, mp3, sizeof(mp3));
-        if (bytes <= 0) {
-            g_failed = g_failed + 1;
+        if (bytes <= 0)
             continue;
-        }
 
         /* 長さ不明の曲はファイルサイズから概算する (128kbps = 16000 B/秒) */
         if (t.duration_sec <= 0)
             t.duration_sec = bytes / 16000;
 
-        if (store_add(&t) == 0)
-            g_done = g_done + 1;
-        else
-            g_failed = g_failed + 1;
+        store_add(&t);
     }
     return 0;
 }
@@ -232,5 +226,3 @@ int dl_pending(void)
 }
 
 const char *dl_current_title(void) { return g_current; }
-int dl_done(void)   { return g_done; }
-int dl_failed(void) { return g_failed; }

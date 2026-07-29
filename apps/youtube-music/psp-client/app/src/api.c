@@ -109,12 +109,6 @@ int api_status(char *name_out, int name_size, int *can_login_out)
     return ctx.auth;
 }
 
-int api_logout(void)
-{
-    int len = api_get("/api/logout", g_buf, sizeof(g_buf));
-    return (len < 0) ? len : 0;
-}
-
 /* --- /api/home ---------------------------------------------------------- */
 
 struct home_ctx { ApiItem *items; int max; int count; };
@@ -309,6 +303,14 @@ static int cp_line(char **f, int nf, void *vctx)
  */
 static char g_cp_buf[1024];
 
+/* g_cp_buf に error 行があるか。共有の g_error には書かない
+   (ワーカースレッドから呼ばれるため) */
+static int cp_has_error(void)
+{
+    char err[8];
+    return tsv_value(g_cp_buf, "error", err, sizeof(err)) != 0;
+}
+
 int api_trackinfo(const char *video_id, ApiTrackInfo *out)
 {
     char path[160];
@@ -319,8 +321,7 @@ int api_trackinfo(const char *video_id, ApiTrackInfo *out)
     int len = api_get(path, g_cp_buf, sizeof(g_cp_buf));
     if (len < 0)
         return len;
-    char err[8];
-    if (tsv_value(g_cp_buf, "error", err, sizeof(err)))
+    if (cp_has_error())
         return API_ERR_SERVER;
     for_each_line(g_cp_buf, 6, cp_line, out);
     return 0;
@@ -337,10 +338,7 @@ int api_rate(const char *video_id, ApiRating rating)
     int len = api_get(path, g_cp_buf, sizeof(g_cp_buf));
     if (len < 0)
         return len;
-    char err[8];
-    if (tsv_value(g_cp_buf, "error", err, sizeof(err)))
-        return API_ERR_SERVER;
-    return 0;
+    return cp_has_error() ? API_ERR_SERVER : 0;
 }
 
 int api_library(const char *video_id, int save)
@@ -352,8 +350,5 @@ int api_library(const char *video_id, int save)
     int len = api_get(path, g_cp_buf, sizeof(g_cp_buf));
     if (len < 0)
         return len;
-    char err[8];
-    if (tsv_value(g_cp_buf, "error", err, sizeof(err)))
-        return API_ERR_SERVER;
-    return 0;
+    return cp_has_error() ? API_ERR_SERVER : 0;
 }

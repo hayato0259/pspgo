@@ -18,7 +18,5 @@ int dl_enqueue(const ApiTrack *t);
 
 int dl_pending(void);                /* 処理中を含む残り曲数 */
 const char *dl_current_title(void);  /* 処理中の曲名 ("" = 待機中) */
-int dl_done(void);                   /* 保存に成功した累計曲数 */
-int dl_failed(void);                 /* 失敗した累計曲数 */
 
 #endif

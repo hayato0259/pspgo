@@ -53,14 +53,10 @@ void draw_rect(int x, int y, int w, int h, unsigned int color);
 void draw_vgrad(int x, int y, int w, int h, unsigned int top, unsigned int bottom);
 void draw_hgrad(int x, int y, int w, int h, unsigned int left, unsigned int right);
 
-/* 生 RGBA ピクセル (辺 texside の正方形) をテクスチャとして描く */
-void gfx_blit_raw(const unsigned int *pixels, int texside,
-                  int x, int y, int w, int h);
-
 /*
- * tint 付き・サブピクセル座標版。
- * アニメーション (拡大など) は整数座標だと 1px 刻みでカクつくため、
- * 動くものは必ずこちらで描く。tint 0xFFFFFFFF で原色。
+ * 生 RGBA ピクセル (辺 texside の正方形) をテクスチャとして描く。
+ * 座標は float (サブピクセル)。整数座標だと拡大などの動きが
+ * 1px 刻みでカクつくため、動くものもそのまま渡せる。tint 0xFFFFFFFF で原色。
  */
 void gfx_blit_raw_ex(const unsigned int *pixels, int texside,
                      float x, float y, float w, float h, unsigned int tint);

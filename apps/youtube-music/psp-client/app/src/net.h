@@ -11,7 +11,6 @@
 void net_load_server_config(void);
 const char *net_server_host(void);
 int net_server_port(void);
-const char *net_server_token(void);
 /* path に共有トークンを付与する。0=成功 / <0=バッファ不足または引数不正 */
 int net_build_path(char *out, int size, const char *path);
 /* server.txt を読めた場合 1 (接続失敗時の案内文の出し分け用) */

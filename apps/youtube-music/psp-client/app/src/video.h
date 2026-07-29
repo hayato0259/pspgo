@@ -28,7 +28,6 @@ int video_start(const char *video_id, int seconds, int start_sec);
 void video_stop(void);
 
 VideoState video_state(void);
-int video_last_error(void);
 
 /*
  * 1 フレームぶんデコードして draw_buf に書く。
@@ -37,9 +36,6 @@ int video_last_error(void);
  * <0 = 終了またはエラー
  */
 int video_decode(void *draw_buf);
-
-/* デコード済みのフレーム数 (実測フレームレートの表示用) */
-int video_frames(void);
 
 /*
  * 直前に描いたフレームの表示時刻 (ミリ秒)。まだ描いていなければ -1。

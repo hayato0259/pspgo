@@ -385,13 +385,6 @@ void gfx_blit_raw_ex(const unsigned int *pixels, int texside,
     blit_tex(pixels, texside, x, y, w, h, tint);
 }
 
-void gfx_blit_raw(const unsigned int *pixels, int texside,
-                  int x, int y, int w, int h)
-{
-    blit_tex(pixels, texside, (float)x, (float)y, (float)w, (float)h,
-             0xFFFFFFFF);
-}
-
 void gfx_logo(int x, int y, int size)
 {
     blit_tex(g_logo, LOGO_SIDE, x, y, size, size, 0xFFFFFFFF);

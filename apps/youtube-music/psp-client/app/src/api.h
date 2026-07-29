@@ -25,9 +25,6 @@ typedef struct {
    can_login_out: サーバーに OAuth クライアントが設定されていれば 1 */
 int api_status(char *name_out, int name_size, int *can_login_out);
 
-/* /api/logout。0=成功 */
-int api_logout(void);
-
 /* /api/home。戻り値: 件数 / <0 エラー */
 int api_home(ApiItem *items, int max);
 

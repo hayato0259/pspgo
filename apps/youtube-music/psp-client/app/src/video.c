@@ -33,8 +33,6 @@ static volatile unsigned int g_rx_tail = 0;   /* デコード側が読んだ位�
 static volatile int g_rx_eof = 0;
 
 static volatile VideoState g_state = VIDEO_STOPPED;
-static volatile int g_last_error = 0;
-static volatile int g_frames = 0;
 static volatile int g_cmd_stop = 0;
 static volatile int g_thread_running = 0;
 
@@ -109,7 +107,6 @@ static int recv_thread(SceSize args, void *argp)
     snprintf(base_path, sizeof(base_path), "/video?yt=%s&sec=%d&t=%d",
              g_video_id, g_seconds, g_start_sec);
     if (net_build_path(path, sizeof(path), base_path) < 0) {
-        g_last_error = -1;
         g_state = VIDEO_ERROR;
         g_thread_running = 0;
         return 0;
@@ -117,7 +114,6 @@ static int recv_thread(SceSize args, void *argp)
 
     g_sock = http_open_stream(net_server_host(), net_server_port(), path);
     if (g_sock < 0) {
-        g_last_error = g_sock;
         g_state = VIDEO_ERROR;
         g_thread_running = 0;
         return 0;
@@ -140,7 +136,6 @@ static int recv_thread(SceSize args, void *argp)
         int got = net_recv_wait_abortable(g_sock, g_rx + pos, (int)room,
                                           &g_cmd_stop);
         if (got < 0) {
-            g_last_error = got;
             break;
         }
         if (got == 0) {
@@ -164,13 +159,11 @@ static int mpeg_setup(void)
     if (!rx_take(g_header, PSMF_HEADER_SIZE))
         return 0;
     if (memcmp(g_header, "PSMF", 4) != 0) {
-        g_last_error = -10;
         g_state = VIDEO_ERROR;
         return -1;
     }
 
     if (sceMpegInit() < 0) {
-        g_last_error = -11;
         g_state = VIDEO_ERROR;
         return -1;
     }
@@ -180,7 +173,6 @@ static int mpeg_setup(void)
     if (!g_ring_data ||
         sceMpegRingbufferConstruct(&g_ring, RING_PACKETS, g_ring_data,
                                    ring_size, ringbuffer_cb, NULL) < 0) {
-        g_last_error = -12;
         g_state = VIDEO_ERROR;
         return -1;
     }
@@ -190,7 +182,6 @@ static int mpeg_setup(void)
     if (!g_mpeg_data ||
         sceMpegCreate(&g_mpeg, g_mpeg_data, mpeg_size, &g_ring,
                       FRAME_WIDTH, 0, 0) < 0) {
-        g_last_error = -13;
         g_state = VIDEO_ERROR;
         return -1;
     }
@@ -202,7 +193,6 @@ static int mpeg_setup(void)
     g_es_buf = sceMpegMallocAvcEsBuf(&g_mpeg);
     if (!g_vstream || !g_es_buf ||
         sceMpegInitAu(&g_mpeg, g_es_buf, &g_au) < 0) {
-        g_last_error = -14;
         g_state = VIDEO_ERROR;
         return -1;
     }
@@ -238,8 +228,6 @@ int video_start(const char *video_id, int seconds, int start_sec)
     g_start_sec = start_sec > 0 ? start_sec : 0;
     g_rx_head = g_rx_tail = 0;
     g_rx_eof = 0;
-    g_frames = 0;
-    g_last_error = 0;
     g_cmd_stop = 0;
     g_init_flag = 0;
     g_au_retry = 0;
@@ -271,8 +259,6 @@ void video_stop(void)
 }
 
 VideoState video_state(void) { return g_state; }
-int video_last_error(void)   { return g_last_error; }
-int video_frames(void)       { return g_frames; }
 int video_pts_ms(void)       { return g_pts_ms; }
 
 int video_decode(void *draw_buf)
@@ -315,7 +301,6 @@ int video_decode(void *draw_buf)
     rc = sceMpegAvcDecode(&g_mpeg, &g_au, FRAME_WIDTH, &g_display_buf,
                           &g_init_flag);
     if (rc < 0) {
-        g_last_error = rc;
         g_state = VIDEO_ERROR;
         return -1;
     }
@@ -330,7 +315,6 @@ int video_decode(void *draw_buf)
         g_pts_ms = 0;
     g_pts_ms += g_start_sec * 1000;   /* シークした場合はその位置を足す */
 
-    g_frames++;
     g_state = VIDEO_PLAYING;
     return 1;
 }

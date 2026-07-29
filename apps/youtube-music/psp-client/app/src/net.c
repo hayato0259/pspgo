@@ -79,7 +79,6 @@ void net_load_server_config(void)
 
 const char *net_server_host(void) { return g_srv_host; }
 int net_server_port(void) { return g_srv_port; }
-const char *net_server_token(void) { return g_srv_token; }
 int net_server_config_loaded(void) { return g_srv_loaded; }
 
 int net_build_path(char *out, int size, const char *path)
