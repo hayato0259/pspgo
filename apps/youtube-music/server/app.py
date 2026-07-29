@@ -645,6 +645,16 @@ def tsv_search(query: str) -> str:
     return "\n".join(lines) + "\n"
 
 
+def track_line(t) -> str:
+    """トラック 1 件を track 行にする。videoId が無ければ空文字列。"""
+    vid = t.get("videoId")
+    if not vid:
+        return ""
+    remember_art(vid, t.get("thumbnails"))
+    dur = t.get("duration_seconds") or parse_len(t.get("length") or t.get("duration"))
+    return f"track\t{clean(vid)}\t{clean(t.get('title'))}\t{clean(artists_of(t))}\t{dur}"
+
+
 def tsv_playlist(pid: str) -> str:
     def fetch(yt):
         try:
@@ -657,16 +667,7 @@ def tsv_playlist(pid: str) -> str:
 
     (title, tracks), _ = with_fallback(fetch, "プレイリスト取得")
     lines = [f"meta\t{title}"]
-
-    for t in tracks:
-        vid = t.get("videoId")
-        if not vid:
-            continue
-        remember_art(vid, t.get("thumbnails"))
-        dur = t.get("duration_seconds") or parse_len(t.get("length") or t.get("duration"))
-        lines.append(
-            f"track\t{clean(vid)}\t{clean(t.get('title'))}\t{clean(artists_of(t))}\t{dur}"
-        )
+    lines += [line for t in tracks if (line := track_line(t))]
     return "\n".join(lines) + "\n"
 
 
@@ -678,16 +679,7 @@ def tsv_radio(video_id: str) -> str:
         "ラジオ取得",
     )
     lines = ["meta\tラジオ"]
-
-    for t in watch.get("tracks", [])[:50]:
-        vid = t.get("videoId")
-        if not vid:
-            continue
-        remember_art(vid, t.get("thumbnails"))
-        dur = t.get("duration_seconds") or parse_len(t.get("length") or t.get("duration"))
-        lines.append(
-            f"track\t{clean(vid)}\t{clean(t.get('title'))}\t{clean(artists_of(t))}\t{dur}"
-        )
+    lines += [line for t in watch.get("tracks", [])[:50] if (line := track_line(t))]
     return "\n".join(lines) + "\n"
 
 

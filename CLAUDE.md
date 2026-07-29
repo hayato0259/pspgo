@@ -40,7 +40,7 @@ youtube-music の実現可否検証は [apps/youtube-music/docs/verification-you
 
 | 用途 | ポート |
 |---|---|
-| youtube-music 配信プロキシ (apps/youtube-music/server/proxy.py) | 8080 |
+| youtube-music アプリサーバー (apps/youtube-music/server/app.py) | 8080 |
 
 ## PSP 固有の地雷（検証で踏んだもの）
 

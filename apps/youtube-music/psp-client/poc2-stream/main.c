@@ -6,8 +6,8 @@
  *   2. 受信した MP3 ストリームをリングバッファへ蓄積
  *   3. sceMp3 (Media Engine) でデコードし sceAudioSRC で出力
  *
- * サーバー側 (server/proxy.py) が YouTube Music の音声を
- * MP3 CBR 128kbps に変換して配信する前提。
+ * サーバー側 (検証当時は server/proxy.py。現在は server/app.py の /stream が同じ
+ * 応答を返す) が YouTube Music の音声を MP3 CBR 128kbps に変換して配信する前提。
  *
  * SERVER_HOST は Makefile の -D で差し替え可能。
  * PPSSPP でホスト機のサーバーへ接続する場合は 127.0.0.1 のままで良い。

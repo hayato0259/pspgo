@@ -20,7 +20,7 @@
 
 ### サーバー側（成功）
 
-- **構成**: [server/proxy.py](../server/proxy.py) — Python 標準ライブラリのみ + ffmpeg + yt-dlp
+- **構成**: server/proxy.py (検証当時の PoC。現在は [server/app.py](../server/app.py) に統合済み) — Python 標準ライブラリのみ + ffmpeg + yt-dlp
 - **確認できたこと**
   - `/search?q=...` : yt-dlp の ytsearch で検索結果 JSON を返せる
   - `/stream?yt=<videoId>` : yt-dlp (bestaudio) → ffmpeg → MP3 CBR 128kbps / 44.1kHz / stereo に変換して配信
